@@ -1,0 +1,986 @@
+---
+title: "Population Structure"
+author: "Joanna Griffiths"
+date: "2024-03-28"
+output: 
+  html_document:
+    toc: true
+---
+
+# Population Structure
+
+## PCA
+
+Using plink to make a PCA: https://www.cog-genomics.org/plink/1.9/input#cm_map
+See `plink_pca.sh`
+```{bash eval=FALSE}
+#!/bin/bash
+
+#SBATCH -D /home/jsgriffi
+#SBATCH --job-name=plink
+#SBATCH --mem=8G
+#SBATCH --ntasks=8
+#SBATCH -o /group/awhitehegrp/joanna/73-Haliotis/output_files/out-%A.%a_plink.txt
+#SBATCH -e /group/awhitehegrp/joanna/73-Haliotis/output_files/error-%A.%a_plink.txt
+#SBATCH --time=72:00:00
+#SBATCH --mail-user=jsgriffiths@ucdavis.edu
+#SBATCH --mail-type=ALL
+#SBATCH -p med
+
+cd /group/awhitehegrp/joanna/73-Haliotis
+
+module load deprecated/plink/1.90
+
+##With Sex-determining region##
+
+#create .log, .map, .nosex, .ped file extensions
+plink --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.plink.LDfiltered_0.8.vcf --allow-extra-chr --recode  --out plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.plink.LDfiltered_0.8
+
+#create .bed, .bim, .fam file extensions
+plink --file plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.plink.LDfiltered_0.8 --allow-extra-chr --make-bed --recode --out plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.plink.LDfiltered_0.8
+
+#make eigenvalue and eigenvector files for PCA input
+plink --file plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.plink.LDfiltered_0.8 --pca --allow-extra-chr --out PCA/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.plink.LDfiltered_0.8.pca
+
+##WITHOUT Sex-determining region##
+
+#create .log, .map, .nosex, .ped file extensions
+plink --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --allow-extra-chr --recode  --out plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8
+
+#create .bed, .bim, .fam file extensions
+plink --file plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8 --allow-extra-chr --make-bed --recode --out plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.plink
+
+#make eigenvalue and eigenvector files for PCA input
+plink --file plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8 --pca --allow-extra-chr --out PCA/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.pca
+```
+I got the following error:
+
+```
+Error: Invalid chromosome code 'JALGQA010000616.1' on line 654 of .vcf file.
+(Use --allow-extra-chr to force it to be accepted.)
+```
+
+See `CCGP_PCA.R` for me playing around with data, but here is final script and results:
+```{r echo=TRUE, eval=FALSE}
+
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+library(vegan)
+library(RColorBrewer)
+library("cowplot")
+
+setwd("~/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/PCAs")
+
+##filtering by max-missing 0.75 and no pop filter, but LD filter 0.8. WITH SEX REGION
+eigenvec <- read.table("NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.plink.LDfiltered_0.8.pca.eigenvec")
+eigenval <- read.table("NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.plink.LDfiltered_0.8.pca.eigenval")
+
+##filtering by max-missing 0.75 and no pop filter, but LD filter 0.8. WITHOUT SEX REGION
+eigenvec <- read.table("NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.pca.eigenvec")
+eigenval <- read.table("NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.pca.eigenval")
+
+# % variance explained, explained 
+# https://stats.stackexchange.com/questions/22569/pca-and-proportion-of-variance-explained
+# https://aaronschlegel.me/principal-component-analysis-r-example.html
+
+prop_explained <- c()
+for (s in eigenval$V1) {
+  #print(s / sum(eigenval$V1))
+  prop_explained <- c(prop_explained,round(((s / sum(eigenval$V1))*100),2))
+}
+
+windows()
+barplot(prop_explained, ylab = "% variance explained by PC", xlab = "PC",
+        names.arg=c(1:length(prop_explained)))
+
+
+pop_info <- read.delim2("../CCGP_metafile_for_analyses.txt")
+pop_info$COLLECTION_YEAR <- as.factor(pop_info$COLLECTION_YEAR)
+pop_info$LIBRARY_PLATE <- as.factor(pop_info$LIBRARY_PLATE)
+pop_info$PointConception <- as.factor(pop_info$PointConception)
+pop_info$LAT_DD <- as.numeric(pop_info$LAT_DD)
+pop_info$LOCATION <- as.factor(pop_info$SIMPLE_LOCATION)
+pop_info$LOCATION <-factor(pop_info$SIMPLE_LOCATION, levels = c("CharlestonSouthCove", "PortOrford", "RogueReef", "Brookings",
+                                                   "CrescentCity", "Trinidad", "ShelterCove", "HouseCove", "VanDamme", "SaltPoint", "TimberCove", "MunizRanch", "BodegaBay", "PointReyes","FarallonesIsland",  "Monterey",  "MorroBay", "SanMiguelIsle", "SanPedro", "PointLoma", "Ensenada", "SantoTomas", "PuntaSanJose"))
+
+
+names(eigenvec)[names(eigenvec)=="V1"] <- "LIB_SAMPLE"
+vcf_sample_info <- inner_join(eigenvec,pop_info, by = "LIB_SAMPLE")
+
+pca <-data.frame(sample=vcf_sample_info$LIB_SAMPLE, 
+                 pop=vcf_sample_info$LOCATION,
+                 lat=vcf_sample_info$LAT_DD,
+                 year=vcf_sample_info$COLLECTION_YEAR,
+                 plate=vcf_sample_info$LIBRARY_PLATE,
+                 PointConception=vcf_sample_info$PointConception,
+                 PC1=vcf_sample_info$V3,
+                 PC2=vcf_sample_info$V4,
+                 PC3=vcf_sample_info$V5,
+                 PC4=vcf_sample_info$V6,
+                 PC5=vcf_sample_info$V7,
+                 stringsAsFactors=FALSE)
+
+pca$pop <-factor(pca$pop, levels = c("CharlestonSouthCove", "PortOrford", "RogueReef", "Brookings",
+                                                                "CrescentCity", "Trinidad", "ShelterCove", "HouseCove", "VanDamme", "SaltPoint", "TimberCove", "MunizRanch", "BodegaBay", "PointReyes","FarallonesIsland",  "Monterey",  "MorroBay", "SanMiguelIsle", "SanPedro", "PointLoma", "Ensenada", "SantoTomas", "PuntaSanJose"))
+
+
+###############
+#Graphing
+###############
+
+windows()
+display.brewer.all()
+
+# Define the number of colors you want
+nb.cols <- 23
+mycolors <- rev(colorRampPalette(brewer.pal(11, "Spectral"))(nb.cols)) #11 is the number of colors in the spectral palette
+
+
+#color by pop PC1 and 2
+# create a new plotting window and set the plotting area into a 1*2 array
+
+plot1 <- ggplot(data = pca)+
+  geom_point(data = pca, aes(x = PC1, y = PC2, color = pop), size = 3)+
+  scale_color_manual(values = mycolors)+
+ # scale_color_manual(name = "population", values=c(grb,org,red,yel,blu,lir))+
+  xlab(paste("PC1: ", prop_explained[1],"%",sep = ""))+
+  ylab(paste("PC2: ", prop_explained[2],"%",sep = ""))+
+  theme_bw()+
+  theme(axis.text.x=element_text(size=10), axis.text.y=element_text(size=10),
+        axis.title.x=element_text(size=20), axis.title.y=element_text(size=20),
+        legend.position = "none")
+
+##Before running the code below, you need to return to the top and read in eigen variables with Sex-determining region removed
+#color by pop PC1 and 2 without sex region
+plot2<- ggplot(data = pca)+
+  geom_point(data = pca, aes(x = PC1, y = PC2, fill = pop, color = pop), size = 3)+
+  scale_color_manual(values = mycolors)+
+  # scale_color_manual(name = "population", values=c(grb,org,red,yel,blu,lir))+
+  xlab(paste("PC1: ", prop_explained[1],"%",sep = ""))+
+  ylab(paste("PC2: ", prop_explained[2],"%",sep = ""))+
+  theme_bw()+
+  theme(axis.text.x=element_text(size=10), axis.text.y=element_text(size=10),
+        axis.title.x=element_text(size=20), axis.title.y=element_text(size=20),
+        legend.position = "none")
+
+
+#####################
+#Supplemental figures with sex-determining region removed
+###################
+
+##color by year
+# Define the number of colors you want
+nb.cols <- 12
+mycolors <- rev(colorRampPalette(brewer.pal(11, "Spectral"))(nb.cols)) #11 is the number of colors in the spectral palette
+windows()
+ggplot(data = pca)+
+  geom_point(data = pca, aes(x = PC1, y = PC2, fill = pop, color = year), size = 3)+
+  scale_color_manual(values = mycolors)+
+  xlab(paste("PC1: ", prop_explained[1],"%",sep = ""))+
+  ylab(paste("PC2: ", prop_explained[2],"%",sep = ""))+
+  theme_bw()+
+  theme(axis.text.x=element_text(size=10), axis.text.y=element_text(size=10),
+        axis.title.x=element_text(size=20), axis.title.y=element_text(size=20))
+
+#color by library prep plate
+windows()
+ggplot(data = pca)+
+  geom_point(data = pca, aes(x = PC1, y = PC2, fill = plate, color = plate), size = 3)+
+  #scale_fill_manual(values=c(grb,org,red,yel,blu,lir), guide=FALSE)+
+  # scale_color_manual(name = "population", values=c(grb,org,red,yel,blu,lir))+
+  #geom_text(data =pca, aes(x = PC1, y = PC2, label=sample)) +
+  xlab(paste("PC1: ", prop_explained[1],"%",sep = ""))+
+  ylab(paste("PC2: ", prop_explained[2],"%",sep = ""))+
+  theme_bw()
+```
+
+
+## Admixture Plots
+
+Helpful Links:
+https://speciationgenomics.github.io/ADMIXTURE/ (following this pipeline below)
+
+https://gaworkshop.readthedocs.io/en/latest/contents/07_admixture/admixture.html
+
+https://www.nature.com/articles/s41467-018-05257-7
+
+See `admixture.sh` script
+```{bash eval=FALSE}
+#!/bin/bash
+
+#SBATCH -D /home/jsgriffi
+#SBATCH --job-name=outflank_admixture
+#SBATCH --mem=8G
+#SBATCH --ntasks=8
+#SBATCH -o /group/awhitehegrp/joanna/73-Haliotis/output_files/out-%A.%a_outflank_admixture.txt
+#SBATCH -e /group/awhitehegrp/joanna/73-Haliotis/output_files/error-%A.%a_outflank_admixture.txt
+#SBATCH --time=72:00:00
+#SBATCH --mail-user=jsgriffiths@ucdavis.edu
+#SBATCH --mail-type=ALL
+#SBATCH -p high
+
+cd /group/awhitehegrp/joanna/73-Haliotis/plink_LD
+
+FILE=FILE=NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.plink
+
+
+#generate input file in plink format if it doesn't already exist (needs .bed, .bim, .fam)
+plink --file $FILE --make-bed --allow-extra-chr --out $FILE
+
+#admixture doesn't accept chromosome names that aren't human so we need to exchange the first column by 0
+awk '{$1="0";print $0}' $FILE.bim > $FILE.bim.tmp
+mv $FILE.bim.tmp $FILE.bim
+
+#run admixture with number of predicted populations. Submit a new script for each line and comment out other lines:
+../admixture_linux-1.3.0/admixture --cv $FILE.bed 1 > log1.out
+../admixture_linux-1.3.0/admixture --cv $FILE.bed 2 > log2.out
+../admixture_linux-1.3.0/admixture --cv $FILE.bed 3 > log3.out
+
+#To identify the best value of k clusters which is the value with lowest cross-validation error, we need to collect the cv errors.
+awk '/CV/ {print $3,$4}' *out | cut -c 4,7-20 > $FILE.cv.error
+
+#PLOT IN R:
+#the prefix for the ADMIXTURE output files (-p ), the file with the population information (-i ), the maximum number of K to be plotted (-k 5), and a list with the populations or species separated by commas (-l <pop1,pop2...>). The list of populations provided with -l gives the order in which the populations or species shall be plotted
+#First move files over to the Admixture directory
+module load R/3.6.3
+cd ../Admixture
+Rscript plotADMIXTURE.r -p $FILE -i Admixture_pop_list_noLowDP -k 3 -l CharlestonSouthCove,PortOrford,RogueReef,Brookings,CrescentCity,Trinidad,ShelterCove,HouseCove,VanDamme,SaltPoint,TimberCove,MunizRanch,BodegaBay,PointReyes,FarallonesIsland,Monterey,MorroBay,SanMiguelIsle,SanPedro,PointLoma,Ensenada,SantoTomas,PuntaSanJose
+
+Rscript plotADMIXTURE.r -p $FILE -i Admixture_year_list_noLowDP -k 3 -l 1998,1999,2003,2007,2008,2009,2010,2011,2014,2016,2020,2021
+
+```
+The lowest cv value for my dataset was K=1
+I only ran admixture with a max of k=3 because it takes longer and uses more memory for higher values and I was confident we didn't have 23 populations based on PCA
+
+Error: I got this error when trying to run the Rscript on the new slurm:
+"
+Error in contrib.url(repos, type) : trying to use CRAN without setting a mirror Calls: install.packages -> startsWith -> contrib.ur
+"
+I started an interactive R session on the command line and installed the required pacakge myself `install.packages("optparse")` and selected 1 for the cran mirror (no idea what this is for). I then had to comment out the line in the rscript plotADMIXTURE.r because otherwise I would get the same error again.
+
+
+
+# Pop Gen Stats
+
+
+
+Helpful link: https://www-users.york.ac.uk/~dj757/popgenomics/workshop5.html:
+
+## Nucleotide Diversity (pi)
+
+Estimated using vcftools
+run `TajimasD.sh`
+```{bash eval=FALSE}
+#!/bin/bash
+
+#SBATCH -D /home/jsgriffi
+#SBATCH --job-name=tajimasD
+#SBATCH --mem=30G
+#SBATCH --ntasks=8
+#SBATCH -o /group/awhitehegrp/joanna/73-Haliotis/output_files/out-%A.%a_TajimasD.txt
+#SBATCH -e /group/awhitehegrp/joanna/73-Haliotis/output_files/error-%A.%a_TajimasD.txt
+#SBATCH --time=72:00:00
+#SBATCH --mail-user=jsgriffiths@ucdavis.edu
+#SBATCH --mail-type=ALL
+#SBATCH -p high
+
+cd /group/awhitehegrp/joanna/73-Haliotis
+
+module load deprecated/bio/1.0
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Charleston_samples_fst --window-pi 10000 --out pop_files/Charleston
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/PortOrford_samples_fst --window-pi 10000 --out pop_files/PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/RogueReef_samples_fst --window-pi 10000 --out pop_files/RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Brookings_samples_fst --window-pi 10000 --out pop_files/Brookings
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Crescent_samples_fst --window-pi 10000 --out pop_files/Crescent
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Trinidad_samples_fst --window-pi 10000 --out pop_files/Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Shelter_samples_fst --window-pi  10000 --out pop_files/Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/House_samples_fst --window-pi 10000 --out pop_files/House
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/VanDamme_samples_fst --window-pi 10000 --out pop_files/VanDamme
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Salt_samples_fst --window-pi 10000 --out pop_files/Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Timber_samples_fst --window-pi 10000 --out pop_files/Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Muniz_samples_fst --window-pi 10000 --out pop_files/Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Bodega_samples_fst --window-pi 10000 --out pop_files/Bodega
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Reyes_samples_fst --window-pi 10000 --out pop_files/Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Farallones_samples_fst --window-pi 10000 --out pop_files/Farallones
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Monterey_samples_fst --window-pi 10000 --out pop_files/Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Morro_samples_fst --window-pi 10000 --out pop_files/Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Miguel_samples_fst --window-pi 10000 --out pop_files/Miguel
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Pedro_samples_fst --window-pi 10000 --out pop_files/Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Loma_samples_fst --window-pi 10000 --out pop_files/Loma
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Ensenada_samples_fst --window-pi 10000 --out pop_files/Ensenada
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Punta_samples_fst --window-pi 10000 --out pop_files/Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --keep pop_files/Tomas_samples_fst --window-pi 10000 --out pop_files/Tomas
+```
+
+
+
+## Heterozygosity
+
+Helpful link: https://hackmd.io/@tlama/heterozygosity
+
+Estimated using vcftools.
+
+Heterozygosity is extremely sensitive to missing data and small sample sizes. So we first need to filter variants with max missing 90% and group collection sites by regions to avoid low sampled sites:
+Oregon (Charleston South Cove, Port Orford, Rogue Reef, and Brookings)
+Northern California (Crescent City, Trinidad, Shelter Cove, House Cove, and Van Dame)
+Central California (Salt Point, Timber Cove, Muniz Ranch, Bodega Bay, Point Reyes, Farallones Island, Monterey, and Morro Bay)
+Southern California/Mexico (San Miguel Island, San Pedro, Point Loma, Ensenada, Santo Tomas, and Punta San Jose). 
+
+run `Het_vcftools.sh`
+```{bash eval=FALSE}
+#!/bin/bash
+
+#SBATCH -D /home/jsgriffi
+#SBATCH --job-name=Het
+#SBATCH --mem=30G
+#SBATCH --ntasks=8
+#SBATCH -o /group/awhitehegrp/joanna/73-Haliotis/output_files/out-%A.%a_Het.txt
+#SBATCH -e /group/awhitehegrp/joanna/73-Haliotis/output_files/error-%A.%a_Het.txt
+#SBATCH --time=72:00:00
+#SBATCH --mail-user=jsgriffiths@ucdavis.edu
+#SBATCH --mail-type=ALL
+#SBATCH -p high
+
+cd /group/awhitehegrp/joanna/73-Haliotis
+
+##Filter by 90% max missing for heterozygosity estimates
+module load deprecated/bio/1.0
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --max-missing 0.9 --recode --recode-INFO-all --out plink_LD/NoSibs.NoLowDP.filtered.vcf.missing90maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing90maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.recode.vcf --keep pop_files/Oregon_samples --het --out pop_files/Oregon
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing90maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.recode.vcf --keep pop_files/N_Cali_samples --het --out pop_files/N_Cali
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing90maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.recode.vcf --keep pop_files/C_Cali_samples --het --out pop_files/C_Cali
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing90maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.recode.vcf --keep pop_files/S_Cali_Mex_samples --het --out pop_files/S_Cali_Mex
+```
+
+
+
+## Pairwise-Fst among all population combinations
+```{bash eval=FALSE}
+#!/bin/bash
+
+#SBATCH -D /home/jsgriffi
+#SBATCH --job-name=fst
+#SBATCH --mem=2G
+#SBATCH --ntasks=8
+#SBATCH -o /group/awhitehegrp/joanna/73-Haliotis/output_files/out-%A.%a_fst_vcf.txt
+#SBATCH -e /group/awhitehegrp/joanna/73-Haliotis/output_files/error-%A.%a_fst_vcf.txt
+#SBATCH --time=72:00:00
+#SBATCH --mail-user=jsgriffiths@ucdavis.edu
+#SBATCH --mail-type=ALL
+#SBATCH -p high
+
+cd /group/awhitehegrp/joanna/73-Haliotis
+
+module load deprecated/bio/1.0
+
+#all pop
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst  --out popgen//NoSibs.NoLowDP.pop.missing5mac3.plink.LDfiltered_0.8
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Brookings_samples_fst --out popgen/pairwise_fst/Bodega-Brookings
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Charleston_samples_fst --out popgen/pairwise_fst/Bodega-Charleston
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Crescent_samples_fst --out popgen/pairwise_fst/Bodega-Crescent
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Ensenada_samples_fst --out popgen/pairwise_fst/Bodega-Ensenada
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Farallones_samples_fst --out popgen/pairwise_fst/Bodega-Farallones
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/House_samples_fst --out popgen/pairwise_fst/Bodega-House
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Loma_samples_fst --out popgen/pairwise_fst/Bodega-Loma
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Migeul_samples_fst --out popgen/pairwise_fst/Bodega-Migeul
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --out popgen/pairwise_fst/Bodega-Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/Bodega-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Bodega-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Bodega-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Bodega-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Bodega-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Bodega-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Bodega-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Bodega-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Bodega-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Bodega-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Bodega-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Bodega-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Bodega_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Bodega-VanDamme
+
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Charleston_samples_fst --out popgen/pairwise_fst/Brookings-Charleston
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Crescent_samples_fst --out popgen/pairwise_fst/Brookings-Crescent
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Ensenada_samples_fst --out popgen/pairwise_fst/Brookings-Ensenada
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Farallones_samples_fst --out popgen/pairwise_fst/Brookings-Farallones
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/House_samples_fst --out popgen/pairwise_fst/Brookings-House
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Loma_samples_fst --out popgen/pairwise_fst/Brookings-Loma
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Migeul_samples_fst --out popgen/pairwise_fst/Brookings-Migeul
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --out popgen/pairwise_fst/Brookings-Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/Brookings-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Brookings-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Brookings-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Brookings-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Brookings-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Brookings-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Brookings-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Brookings-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Brookings-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Brookings-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Brookings-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Brookings-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Brookings_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Brookings-VanDamme
+
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Crescent_samples_fst --out popgen/pairwise_fst/Charleston-Crescent
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Ensenada_samples_fst --out popgen/pairwise_fst/Charleston-Ensenada
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Farallones_samples_fst --out popgen/pairwise_fst/Charleston-Farallones
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/House_samples_fst --out popgen/pairwise_fst/Charleston-House
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Loma_samples_fst --out popgen/pairwise_fst/Charleston-Loma
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Migeul_samples_fst --out popgen/pairwise_fst/Charleston-Migeul
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --out popgen/pairwise_fst/Charleston-Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/Charleston-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Charleston-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Charleston-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Charleston-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Charleston-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Charleston-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Charleston-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Charleston-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Charleston-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Charleston-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Charleston-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Charleston-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Charleston_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Charleston-VanDamme
+
+
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Ensenada_samples_fst --out popgen/pairwise_fst/Crescent-Ensenada
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Farallones_samples_fst --out popgen/pairwise_fst/Crescent-Farallones
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/House_samples_fst --out popgen/pairwise_fst/Crescent-House
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Loma_samples_fst --out popgen/pairwise_fst/Crescent-Loma
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Migeul_samples_fst --out popgen/pairwise_fst/Crescent-Migeul
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --out popgen/pairwise_fst/Crescent-Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/Crescent-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Crescent-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Crescent-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Crescent-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Crescent-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Crescent-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Crescent-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Crescent-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Crescent-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Crescent-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Crescent-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Crescent-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Crescent_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Crescent-VanDamme
+
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Farallones_samples_fst --out popgen/pairwise_fst/Ensenada-Farallones
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/House_samples_fst --out popgen/pairwise_fst/Ensenada-House
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Loma_samples_fst --out popgen/pairwise_fst/Ensenada-Loma
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Migeul_samples_fst --out popgen/pairwise_fst/Ensenada-Migeul
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --out popgen/pairwise_fst/Ensenada-Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/Ensenada-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Ensenada-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Ensenada-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Ensenada-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Ensenada-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Ensenada-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Ensenada-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Ensenada-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Ensenada-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Ensenada-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Ensenada-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Ensenada-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Ensenada_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Ensenada-VanDamme
+
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/House_samples_fst --out popgen/pairwise_fst/Farallones-House
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Loma_samples_fst --out popgen/pairwise_fst/Farallones-Loma
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Migeul_samples_fst --out popgen/pairwise_fst/Farallones-Migeul
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --out popgen/pairwise_fst/Farallones-Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/Farallones-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Farallones-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Farallones-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Farallones-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Farallones-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Farallones-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Farallones-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Farallones-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Farallones-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Farallones-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Farallones-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Farallones-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Farallones_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Farallones-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Loma_samples_fst --out popgen/pairwise_fst/House-Loma
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Migeul_samples_fst --out popgen/pairwise_fst/House-Migeul
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --out popgen/pairwise_fst/House-Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/House-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/House-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/House-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/House-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/House-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/House-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/House-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/House-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/House-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/House-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/House-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/House-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/House_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/House-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Migeul_samples_fst --out popgen/pairwise_fst/Loma-Migeul
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --out popgen/pairwise_fst/Loma-Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/Loma-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Loma-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Loma-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Loma-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Loma-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Loma-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Loma-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Loma-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Loma-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Loma-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Loma-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Loma-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Loma_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Loma-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Monterey_samples_fst --out popgen/pairwise_fst/Migeul-Monterey
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/Migeul-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Migeul-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Migeul-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Migeul-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Migeul-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Migeul-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Migeul-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Migeul-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Migeul-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Migeul-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Migeul-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Migeul-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Migeul_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Migeul-VanDamme
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Morro_samples_fst --out popgen/pairwise_fst/Monterey-Morro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Monterey-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Monterey-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Monterey-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Monterey-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Monterey-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Monterey-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Monterey-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Monterey-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Monterey-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Monterey-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Monterey-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Monterey_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Monterey-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Muniz_samples_fst --out popgen/pairwise_fst/Morro-Muniz
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Morro-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Morro-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Morro-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Morro-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Morro-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Morro-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Morro-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Morro-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Morro-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Morro-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Morro_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Morro-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/Pedro_samples_fst --out popgen/pairwise_fst/Muniz-Pedro
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Muniz-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Muniz-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Muniz-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Muniz-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Muniz-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Muniz-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Muniz-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Muniz-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Muniz-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Muniz_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Muniz-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/PortOrford_samples_fst --out popgen/pairwise_fst/Pedro-PortOrford
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/Pedro-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Pedro-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Pedro-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Pedro-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Pedro-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Pedro-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Pedro-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Pedro-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Pedro_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Pedro-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/Punta_samples_fst --out popgen/pairwise_fst/PortOrford-Punta
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/PortOrford-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/PortOrford-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/PortOrford-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/PortOrford-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/PortOrford-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/PortOrford-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/PortOrford-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/PortOrford_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/PortOrford-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Punta_samples_fst --weir-fst-pop pop_files/Reyes_samples_fst --out popgen/pairwise_fst/Punta-Reyes
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Punta_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Punta-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Punta_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Punta-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Punta_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Punta-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Punta_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Punta-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Punta_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Punta-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Punta_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Punta-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Punta_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Punta-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Reyes_samples_fst --weir-fst-pop pop_files/RogueReef_samples_fst --out popgen/pairwise_fst/Reyes-RogueReef
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Reyes_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/Reyes-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Reyes_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Reyes-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Reyes_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Reyes-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Reyes_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Reyes-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Reyes_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Reyes-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Reyes_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Reyes-VanDamme
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/RogueReef_samples_fst --weir-fst-pop pop_files/Salt_samples_fst --out popgen/pairwise_fst/RogueReef-Salt
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/RogueReef_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/RogueReef-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/RogueReef_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/RogueReef-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/RogueReef_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/RogueReef-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/RogueReef_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/RogueReef-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/RogueReef_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/RogueReef-VanDamme
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Salt_samples_fst --weir-fst-pop pop_files/Shelter_samples_fst --out popgen/pairwise_fst/Salt-Shelter
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Salt_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Salt-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Salt_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Salt-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Salt_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Salt-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Salt_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Salt-VanDamme
+
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Shelter_samples_fst --weir-fst-pop pop_files/Timber_samples_fst --out popgen/pairwise_fst/Shelter-Timber
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Shelter_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Shelter-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Shelter_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Shelter-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Shelter_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Shelter-VanDamme
+
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Timber_samples_fst --weir-fst-pop pop_files/Tomas_samples_fst --out popgen/pairwise_fst/Timber-Tomas
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Timber_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Timber-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Timber_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Timber-VanDamme
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Tomas_samples_fst --weir-fst-pop pop_files/Trinidad_samples_fst --out popgen/pairwise_fst/Tomas-Trinidad
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Tomas_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Tomas-VanDamme
+
+
+vcftools --vcf plink_LD/NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.LDfiltered_0.8.vcf --fst-window-size 10000 --fst-window-step 5000 --weir-fst-pop pop_files/Trinidad_samples_fst --weir-fst-pop pop_files/VanDamme_samples_fst --out popgen/pairwise_fst/Trinidad-VanDamme
+
+```
+
+
+Results from pop-wide pair-wise FST:
+```
+Keeping individuals in 'keep' list
+After filtering, kept 236 out of 236 Individuals
+Outputting Windowed Weir and Cockerham Fst estimates.
+Weir and Cockerham mean Fst estimate: 0.0010306
+Weir and Cockerham weighted Fst estimate: 0.0010119
+After filtering, kept 881814 out of a possible 881814 Sites
+```

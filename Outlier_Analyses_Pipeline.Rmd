@@ -1,0 +1,2046 @@
+---
+title: "Outlier Analyses"
+author: "Joanna Griffiths"
+date: "2024-03-28"
+output: 
+  html_document:
+    toc: true
+---
+
+# Outlier Analyses
+
+This link has been a super helpful general guide: https://baylab.github.io/MarineGenomicsSemester/
+
+## PCAdapt
+
+Helpful links:
+https://bcm-uga.github.io/pcadapt/articles/pcadapt.html
+
+https://bcm-uga.github.io/pcadapt/articles/pcadapt.html#:~:text=pcadapt%20has%20been%20developed%20to,Principal%20Component%20Analysis%20(PCA).&text=A%20total%20of%20150%20individuals,genotyped%20at%201%2C500%20diploid%20markers.
+
+Make sure the .bed, .bim, .fam files are present, if not run following lines in `outlier.sh` scripts:
+```{bash eval=FALSE}
+#!/bin/bash
+
+#SBATCH -D /home/jsgriffi
+#SBATCH --job-name=outlier
+#SBATCH --mem=256G
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH -o /group/awhitehegrp/joanna/73-Haliotis/output_files/out-%A.%a_outlier.txt
+#SBATCH -e /group/awhitehegrp/joanna/73-Haliotis/output_files/error-%A.%a_outlier.txt
+#SBATCH --time=168:00:00
+#SBATCH --mail-user=jsgriffiths@ucdavis.edu
+#SBATCH --mail-type=ALL
+#SBATCH -p high
+
+module load plink
+cd /group/awhitehegrp/joanna/73-Haliotis
+
+FILE=NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3
+plink --vcf ${FILE}.vcf --set-missing-var-ids @:# --recode --allow-extra-chr --out ${FILE}.plink
+plink --file ${FILE}.plink --make-bed --allow-extra-chr --out ${FILE}.plink
+
+```
+Move the plink files to plink directory on farm
+
+In the `outlier.sh` script, run the following lines:
+```{bash eval=FALSE}
+Rscript outliers/pcadapt.r
+```
+
+This is the code in `pcadapt.r`
+First run it with k=10 or more. We will make a screeplot later to figure out how many PC axes are describing most of the data, and then rerun pcadapt with the new number of K values.
+```{r eval=FALSE}
+#install.packages("pcadapt")
+#install.packages("qvalue") #try one of these to install qvalue
+#if (!require("BiocManager", quietly = TRUE))
+#  install.packages("BiocManager")
+#BiocManager::install(version = "3.10")
+#BiocManager::install("qvalue")
+library("qvalue")
+library("pcadapt")
+
+setwd("/group/awhitehegrp/joanna/73-Haliotis")
+vcf.path="NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf"
+meta.path="outliers/CCGP_metafile_for_outlier_analyses.txt"
+
+##choose vcf file with or without LD filtering
+genos <- read.pcadapt("NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.bed", type = "bed")
+
+
+#choose K value
+#x <- pcadapt(input=genos,K=10)
+#x <- pcadapt(input=genos,K=5) 
+x <- pcadapt(input=genos,K=2, LD.clumping = list(size = 200, thr = 0.1))
+
+#save(x, file = "outliers/pcadapt_k10.RData")
+save(x, file = "outliers/pcadapt_k2_LDthinned.RData")
+
+```
+Similar to the issue with running the Admixutre plot script, I had to start an interative mode of R to manually install the R packages first, rather as within the R script file. Then make sure to comment out install.package lines
+
+Now on the desktop, lets look at the output (see `outliers.R` for all code, and see code below for final code)
+```{r, eval=FALSE}
+####################
+#pcadapt
+#####################
+#install.packages("pcadapt")
+
+#if (!require("BiocManager", quietly = TRUE))
+#  install.packages("BiocManager")
+#BiocManager::install(version = "3.16")
+#BiocManager::install("qvalue")
+
+library("qvalue")
+library("pcadapt")
+library("tidyr")
+library("qqman")
+
+setwd("~/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/outlier_analyses")
+load("pcadapt_K10.RData") #test
+load("pcadapt_K5.RData") #influenced by way too much LD
+load("pcadapt_K3.RData") #influenced by way too much LD
+load("pcadapt_K1.RData") #sanity check to understand what PCAdapt is doing behind the scenes
+load("pcadapt_k3_LDthinned.RData") #PC3 has LD still
+load("pcadapt_k10_LDthinned.RData") #scree plot suggests K=2
+load("pcadapt_k2_LDthinned.RData") #FINAL
+
+plot(x,option="screeplot")
+#plot isn't ideal (it should be steep followed by a horizontal line but mine curves down). K=5?? looks like best option before it tapers off into a horizontal line. So re-running pcadapt with k=5
+
+meta <- read.delim2("CCGP_metafile_for_outlier_analyses.txt")
+meta$LOCATION <-factor(meta$LOCATION, levels = c("CharlestonSouthCove", "PortOrford", "RogueReef", "Brookings","CrescentCity", "Trinidad", "ShelterCove", "HouseCove", "VanDamme", "SaltPoint", "TimberCove", "MunizRanch", "BodegaBay", "PointReyes","FarallonesIsland",  "Monterey",  "MorroBay", "SanMiguelIsle", "SanPedro", "PointLoma", "Ensenada", "SantoTomas", "PuntaSanJose"))
+
+
+library(RColorBrewer)
+nb.cols <- 23
+mycolors <- rev(colorRampPalette(brewer.pal(11, "Spectral"))(nb.cols)) #11 is the number of colors in the spectral palette
+yearcolors <- rev(colorRampPalette(brewer.pal(11, "Spectral"))(12))
+
+#PC1 and PC2
+windows()
+plot(x,option="scores",pop=meta$LOCATION, col=mycolors)
+plot(x,option="scores",pop=meta$COLLECTION_YEAR, col=yearcolors)
+
+
+#PC2 and PC3
+windows()
+plot(x, option = "scores", i = 2, j = 3, pop = meta$LOCATION, col=mycolors)
+plot(x, option = "scores", i = 2, j = 3, pop = meta$COLLECTION_YEAR, col=yearcolors)
+
+windows()
+plot(x,option="manhattan")
+
+##check if LD is an issue by plotting loadings (contributions of each SNP to the PC) and to evaluate if the loadings are clustered in a single or several genomic regions.
+windows()
+par(mfrow = c(2, 2))
+for (i in 1:3)
+  plot(x$loadings[,i], pch = 19, cex = .3, ylab = paste0("Loadings PC", i))
+##PC2 and PC3 has evidence of strong LD (ie areas of low recombination; need to perform LD thinning)
+
+windows()
+hist(x$pvalues, xlab = "p-values", main = NULL, breaks = 50, col = "orange")
+
+windows()
+plot(x, option = "qqplot", threshold = 0.05)
+
+#qvalue correction
+qval <- qvalue(x$pvalues)$qvalues
+q_outliers <- which(qval<0.05)
+length(q_outliers) #13359 for k=5, #3185 for k=1, 10341 for k=3, 8574 for K=3 LD thinned, 3604 for k=2 LD thinned
+q_outliers <- data.frame(q_outliers)
+qval <- data.frame(qval)
+qval$line_num <- 1:nrow(qval) #add line numbers
+
+
+#q_outliers <- which(qval<0.01)
+#length(q_outliers) #9913 for k=5
+
+snp_pc <- get.pc(x, q_outliers)
+save(q_outliers, file="pcadapt_results.RData")
+write.table(q_outliers,file = "CCGP_popLD-pcadapt.snp", quote = F,row.names = F,col.names = F)
+
+
+#Bonferroni correction, didn't run this for final version, used qvalues to match outflank cutoff
+padj <- p.adjust(x$pvalues,method="bonferroni")
+alpha <- 0.05
+b_outliers <- which(padj < alpha)
+length(b_outliers) #199 for K=1, 4251 for k=3, 2558 for k=3 LD thinned, 274 for K=2 LD thinned
+snp_pc <- get.pc(x, b_outliers)
+
+b_outliers <- data.frame(padj)
+b_outliers$line_num <- 1:nrow(b_outliers) #add line numbers
+
+##for manhattan graphing only:
+b_outliers <- x$pvalues
+b_outliers <- data.frame(b_outliers)
+b_outliers$line_num <- 1:nrow(b_outliers) #add line numbers
+
+#import bim file with chr and snp location info (I edited the bim file to turn spaces into tabs and called the new file SNP_IDs)
+chrsnp <- read.delim2("SNP_IDs_noLD", header=F)
+chrsnp$line_num <- 1:nrow(chrsnp) #add line numbers
+chrsnp <- chrsnp[,c(2, 7)]
+
+#merge outlier file with SNP ID file with 0.05 qvalue corrected outliers, didn't run in the end
+chrsnp_pcadapt <- merge(qval, chrsnp, by ="line_num")
+chrsnp_outliers_pcadapt <- subset(chrsnp_pcadapt, qval<0.05)
+#write.table(chrsnp_outliers_pcadapt,file = "CCGP_pcadapt_outliers", quote = F,row.names = F)
+
+pcadapt_ID_structure_analysis <- chrsnp_outliers_pcadapt[,c(3)]
+#write.table(pcadapt_ID_structure_analysis,file = "CCGP_pcadapt_outliers_for_structure", quote = F,row.names = F, col.names = F)
+
+#merge outlier file with SNP ID file with bonferroni corrected outliers
+chrsnp_pcadapt <- merge(b_outliers, chrsnp, by ="line_num")
+chrsnp_outliers_pcadapt <- subset(chrsnp_pcadapt, padj<0.05)
+#write.table(chrsnp_outliers_pcadapt,file = "CCGP_pcadapt_outliers", quote = F,row.names = F)
+
+pcadapt_ID_structure_analysis <- chrsnp_outliers_pcadapt[,c(3)]
+write.table(pcadapt_ID_structure_analysis,file = "CCGP_pcadapt_outliers_for_structure", quote = F,row.names = F, col.names = F)
+
+####manhattan plot
+chrsnp_pcadapt <- separate(data = chrsnp_pcadapt, col = "V2", into = c("CHR", "SNP"), sep = "\\:", remove = FALSE)
+
+GCA_contigs <- read.delim2("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GO/GCA_contigs.txt", header=T)
+colnames(GCA_contigs) = c("CHR", "SCAF")
+
+chrsnp_pcadapt2 <- merge(chrsnp_pcadapt, GCA_contigs, by ="CHR")
+chrsnp_pcadapt2$SCAF <- gsub("SCAF_","",as.character(chrsnp_pcadapt2$SCAF))
+
+chrsnp_pcadapt2$SCAF<- as.numeric(chrsnp_pcadapt2$SCAF)
+chrsnp_pcadapt2$SNP<- as.numeric(chrsnp_pcadapt2$SNP)
+chrsnp_pcadapt2$b_outliers<- as.numeric(chrsnp_pcadapt2$b_outliers) 
+#chrsnp_pcadapt2$qval<- as.numeric(chrsnp_pcadapt2$qval) 
+
+windows()
+manhattan(chrsnp_pcadapt2, chr="SCAF", bp="SNP", snp="SNP", p="qval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T, ylim=c(0,100))
+
+
+##color by qval instead of bonferroni lines
+windows()
+manhattan(chrsnp_pcadapt2, chr="SCAF", bp="SNP", snp="V2", p="b_outliers", logp = T, ylim=c(0,20),  highlight=pcadapt_ID_structure_analysis, suggestiveline = F, genomewideline = F)
+
+```
+
+
+
+
+## Outflank
+
+Helpful links: https://htmlpreview.github.io/?https://github.com/whitlock/OutFLANK/blob/master/inst/doc/OutFLANKAnalysis.html
+
+https://baylab.github.io/MarineGenomicsSemester/
+chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://evomics.org/wp-content/uploads/2020/01/Practical_intro_Rdudaniec.pdf
+
+https://rstudio-pubs-static.s3.amazonaws.com/305384_9aee1c1046394fb9bd8e449453d72847.html
+
+Outflank requires vcf as input, so we need to convert our plink file back to vcf (we can't use original vcf because it isn't LD pruned, only the plink file is pruned)
+
+Run the following lines on the `outlier.sh` script:
+```{bash eval=FALSE}
+
+module load plink
+cd /group/awhitehegrp/joanna/73-Haliotis
+FILE=NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3
+plink --file plink_LD/$FILE --allow-extra-chr --out outliers/$FILE --recode vcf
+```
+
+Run the following lines on the `outlier.sh` script:
+```{bash eval=FALSE}
+Rscript outliers/outflank.r
+```
+
+The code in the outflank.r looks like this:
+Note that you need to manually and interactively install R packages and then comment them out in script below
+```{r eval=FALSE}
+library("devtools")
+#install_github("whitlock/OutFLANK")
+library("OutFLANK")
+library(vcfR)
+
+
+setwd("/group/awhitehegrp/joanna/73-Haliotis/outliers")
+data <- read.vcfR("../NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf")
+##Tried with less missing data to see if it was causing issues with outflank (didn't seem to be root of problem so stuck with missing at 75%)
+#data <- read.vcfR("../NoSibs.NoLowDP.filtered.vcf.missing90maf5.min10.maxDP40.contigremoved3.recode.vcf")
+geno <- extract.gt(data)
+
+G <- geno
+G[geno %in% c("0/0")] <- 0
+G[geno  %in% c("0/1")] <- 1
+G[geno %in% c("1/1")] <- 2
+G[is.na(G)] <- 9
+tG <- t(G)
+#save(tG, file="outflank_tG.RData")
+
+
+#load("outflank_tG.RData")
+meta <- read.delim2("CCGP_metafile_for_outlier_analyses.txt")
+meta$LOCATION <-factor(meta$LOCATION, levels = c("CharlestonSouthCove", "PortOrford", "RogueReef", "Brookings","CrescentCity", "Trinidad", "ShelterCove", "HouseCove", "VanDamme", "SaltPoint", "TimberCove", "MunizRanch", "BodegaBay", "PointReyes","FarallonesIsland",  "Monterey",  "MorroBayPupRock", "MorroBayDiabloCove", "MorroBayPattonCove", "SanMiguelIsle", "SanPedro", "PointLoma", "Ensenada", "SantoTomas", "PuntaSanJose"))
+
+
+fst <- MakeDiploidFSTMat(tG,locusNames=1:ncol(tG),popNames=meta$LOCATION)
+save(fst, file="outflank.RData")
+#save(fst, file="outflank_miss90.RData")
+```
+
+
+Now let's open the RData file on the local computer:
+```{r, eval=F}
+#########################
+#Outflank
+########################
+library("devtools")
+#install_github("whitlock/OutFLANK")
+library("OutFLANK")
+#library(vcfR)
+library(bigstatsr)
+#install_github("privefl/bigsnpr")
+library(bigsnpr)   # package for SNP trimming
+
+setwd("~/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/outlier_analyses")
+
+#obtain trimmed SNPs (halfway through FARM steps)
+load("outflank_tG.RData")
+
+#obtain output from FARM
+load("outflank.RData")
+
+#obtain output from this script
+load("Outflank_results.RData")
+
+#check order of SNPs in data
+#load("outflank_tG.RData") #yep, order of columns matches order of SNPs in vcf file!
+
+#obtain output from FARM with gnotyping in 90% ind, 0 outliers with this method, and the model fits the data even worse than before. Also a comparison on FST vs FSTNoCorr, 90miss is better but not by a ton. It removes the top oprtion, but the bottom portion is still present
+#load("outflank_miss90.RData")
+
+meta <- read.delim2("CCGP_metafile_for_outlier_analyses.txt")
+meta$LOCATION <-factor(meta$LOCATION, levels = c("CharlestonSouthCove", "PortOrford", "RogueReef", "Brookings",
+                                                 "CrescentCity", "Trinidad", "ShelterCove", "HouseCove", "VanDamme", "SaltPoint", "TimberCove", "MunizRanch", "BodegaBay", "PointReyes",
+                                                 "FarallonesIsland",  "Monterey",  "MorroBay", "SanMiguelIsle", "SanPedro", "PointLoma", "Ensenada", "SantoTomas", "PuntaSanJose"))
+
+
+head(fst)
+windows()
+hist(fst$FST,breaks=100)
+
+windows()
+hist(fst$FSTNoCorr, breaks=100) #no negatives!
+
+summary(fst$FST)
+'''
+ Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+-0.06962 -0.01064 -0.00128 -0.00007  0.00856  0.21559      150 
+'''
+
+windows()
+plot(fst$He, fst$FST)
+#Here, you can see how some of the low H loci have high FST. These are all neutral loci in the simulation, and it is important to exclude them from the OutFLANK algorithm
+#see this issue on Github for weird He results: https://github.com/whitlock/OutFLANK/issues/33
+#maybe mine is fine?
+#Sometimes when studying closely related species there may be admixture, and OutFLANK has been shown to have low performance in this scenario: https://github.com/whitlock/OutFLANK/issues/12
+
+#Data checks: FST vs. FSTNoCorr. All SNPs should follow a linear relationship. Mine dont
+windows()
+plot(fst$FST, fst$FSTNoCorr)
+abline(0,1)
+
+##Select a set of SNPs to create null FST distribution that are not in LD:
+##import bim file with chr and snp location info (I edited the bim file to turn spaces into tabs and called the new file SNP_IDs)
+chrsnp <- read.delim2("SNP_IDs_noLD", header=F)
+#chrsnp <- read.delim2("SNP_IDs_miss90_noLD", header=F) #one with miss90 filter
+
+chrsnp$line_num <- 1:nrow(chrsnp) #add line numbers
+chrsnp <- chrsnp[,c(2, 7)]
+colnames(chrsnp) <- c("SNP", "LocusName")
+
+chrsnpLD <- read.delim2("SNP_IDs", header=F)
+chrsnpLD <- chrsnpLD[,c(1,2)]
+colnames(chrsnpLD) <- c("V1", "SNP")
+
+chrsnp2 <- merge(chrsnp, chrsnpLD, by="SNP")
+chrsnp2 <- chrsnp2[,c(1, 2)]
+
+fst_LD <- merge(fst, chrsnp2, by="LocusName")
+fst_LD <- fst_LD[,c(1, 2,3,4,5,6,7,8,9)]
+
+OF <- OutFLANK(fst_LD, LeftTrimFraction= 0.05, RightTrimFraction= 0.05,
+               Hmin=0.1, NumberOfSamples=23, qthreshold=0.05) #number of samples here refers to number of populations 
+
+##old, without LD pruning
+#OF <- OutFLANK(fst,LeftTrimFraction=0.01,RightTrimFraction=0.01,
+#               Hmin=0.05,NumberOfSamples=23,qthreshold=0.01) #number of samples here refers to number of populations 
+
+windows()
+OutFLANKResultsPlotter(OF,withOutliers=T,
+                       NoCorr=T,Hmin=0.1,binwidth=0.005,
+                       Zoom=F,RightZoomFraction=0.05,titletext=NULL)
+
+windows()
+OutFLANKResultsPlotter(OF,withOutliers=T,
+                       NoCorr=T,Hmin=0.1,binwidth=0.005,
+                       Zoom=F,RightZoomFraction=0.25,titletext=NULL)
+
+#check pvalue of histogram, we expect histogram to be flat
+windows()
+hist(OF$results$pvaluesRightTail)
+
+P1 <- pOutlierFinderChiSqNoCorr(fst, Fstbar= OF$FSTNoCorrbar,
+                                dfInferred= OF$dfInferred, qthreshold=0.05, Hmin=0.1)
+outliers <- P1$OutlierFlag==TRUE #which of the SNPs are outliers?
+table(outliers) #39 true outliers
+
+windows()
+plot(P1$He, P1$FST, pch=19, col=rgb(0,0,0,0.1))
+points(P1$He[outliers], P1$FST[outliers], col="blue")
+
+#manhattan plot
+windows()
+plot(P1$LocusName[P1$He>0.1], P1$FST[P1$He>0.1],
+     xlab="Position", ylab="FST", col=rgb(0,0,0,0.2))
+points(P1$LocusName[outliers], P1$FST[outliers], col="magenta", pch=20)  
+
+#write.table(OF,file = "CCGP_popLD-outflank.snp", quote = F,row.names = F,col.names = F)
+
+save(OF, P1, outliers, file="Outflank_results.RData")
+
+outliers <- data.frame(outliers)
+outliers$line_num <- 1:nrow(outliers) #add line numbers
+outflank_outliers <- subset(outliers, outliers=="TRUE")
+
+#import bim file with chr and snp location info (I edited the bim file to turn spaces into tabs and called the new file SNP_IDs)
+chrsnp <- read.delim2("SNP_IDs_noLD", header=F)
+chrsnp$line_num <- 1:nrow(chrsnp) #add line numbers
+chrsnp <- chrsnp[,c(2, 7)]
+
+#merge outlier file with SNP ID file
+chrsnp_outliers_outflank <- merge(outflank_outliers, chrsnp, by ="line_num")
+chrsnp_outliers_outflank <- chrsnp_outliers_outflank[,c(1, 3)]
+#write.table(chrsnp_outliers_outflank,file = "CCGP_outflank_outliers", quote = F,row.names = F)
+outflank_ID_structure_analysis <- chrsnp_outliers_outflank[,c(2)]
+#write.table(outflank_ID_structure_analysis,file = "CCGP_outflank_outliers_for_structure", quote = F,row.names = F, col.names = F)
+
+#merge outflank P1 file with SNP ID file
+library(qqman)
+
+P1$line_num <- 1:nrow(P1) #add line numbers
+chrsnp_outflank <- merge(P1, chrsnp, by ="line_num")
+chrsnp_outflank<-separate(data = chrsnp_outflank, col = V2, into = c("CHR", "SNP"), sep = "\\:", remove = FALSE)
+
+GCA_contigs <- read.delim2("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GO/GCA_contigs.txt", header=T)
+colnames(GCA_contigs) = c("CHR", "SCAF")
+
+chrsnp_outflank2 <- merge(chrsnp_outflank, GCA_contigs, by ="CHR")
+chrsnp_outflank2$SCAF <- gsub("SCAF_","",as.character(chrsnp_outflank2$SCAF))
+
+chrsnp_outflank2$SCAF<- as.numeric(chrsnp_outflank2$SCAF)
+chrsnp_outflank2$SNP<- as.numeric(chrsnp_outflank2$SNP)
+chrsnp_outflank2$pvalues<- as.numeric(chrsnp_outflank2$qvalues)
+chrsnp_outflank2 <- chrsnp_outflank2[!(is.na(chrsnp_outflank$qvalues)), ]
+
+windows()
+manhattan(chrsnp_outflank2, chr="SCAF", bp="SNP", p="qvalues", snp="V2", highlight=outflank_ID_structure_analysis, logp = T,ylim=c(0,5), suggestiveline=F, genomewideline=F)
+
+
+```
+
+
+
+
+## Outlier Overlap
+
+Let's look to see if our different outlier analyses identified the same SNPs under selection
+```{r eval=FALSE}
+setwd("~/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/outlier_analyses")
+
+outflank <- read.table("CCGP_outflank_outliers", header=TRUE)
+pcadapt <- read.table("CCGP_pcadapt_outliers", header=TRUE)
+
+outlier_overlap <- merge(outflank, pcadapt, by="line_num") #0 SNPs overlap
+
+#alternative without files from above:
+outlier_overlap <- merge(chrsnp_outliers_outflank, chrsnp_outliers_pcadapt, by="line_num") #0
+
+#choose one input file
+GEA_outliers <- read.delim2("../GEA/GEA_BioOracle_minSST_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_BioOracle_maxSST_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_upwelling_cuti_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_upwelling_beuti_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_upwelling_beuti_top5_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_Upwelling_beuti_range_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_Upwelling_beuti_stdev_outliers", header=F)
+
+colnames(GEA_outliers) <- c("idk1", "pvalue", "V2","idk3", "idk4")
+
+pcadapt_overlap <- merge(GEA_outliers, pcadapt, by="V2") 
+#0 overlap with any GEA variables
+
+outflank_overlap <- merge(GEA_outliers, outflank, by="V2") 
+#0 overlap with any GEA variables
+```
+
+
+## Admixture on Outliers
+Even though I don't think our outliers are very real or representative of population differences, I think it's still interesting to run admixture on the outlier SNPs.
+
+Rerun the `admixture.sh` script with the following lines of code:
+```{bash eval=FALSE}
+module load deprecated/plink/1.90
+
+FILE=NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink
+cd /group/awhitehegrp/joanna/73-Haliotis/Admixture
+plink --file ../$FILE --make-bed --extract ../outliers/CCGP_outflank_outliers_for_structure --allow-extra-chr --out plink_outflank
+plink --file ../$FILE --make-bed --extract ../outliers/CCGP_pcadapt_outliers_for_structure --allow-extra-chr --out plink_pcadapt
+
+
+#############
+#OutFLANK
+##############
+
+##change name of chromosomes first:
+awk '{$1="0";print $0}' plink_outflank.bim > plink_outflank.bim.tmp
+mv plink_outflank.bim.tmp plink_outflank.bim
+
+##run admixture:
+../admixture_linux-1.3.0/admixture --cv plink_outflank.bed 1 > log1.plink_outflank.out
+../admixture_linux-1.3.0/admixture --cv plink_outflank.bed 2 > log2.plink_outflank.out
+../admixture_linux-1.3.0/admixture --cv plink_outflank.bed 3 > log3.plink_outflank.out
+
+##identify best value of k cluster which is value with lowest cross-validation error
+awk '/CV/ {print $3,$4}' *plink_outflank.out | cut -c 4,7-20 > plink_outflank.cv.error
+
+#PLOT IN R: run interactively
+#the prefix for the ADMIXTURE output files (-p ), the file with the population information (-i ), the maximum number of K to be plotted (-k 5), and a list with the populations or species separated by commas (-l <pop1,pop2...>). The list of populations provided with -l gives the order in which the populations or species shall be plotted
+#ove over relevant files to Admicture directory!
+module load R/3.6.3
+#make sure you are in plink_LD directory
+Rscript ../Admixture/plotADMIXTURE.r -p plink_outflank -i ../Admixture/Admixture_pop_list_noLowDP -k 3 -l CharlestonSouthCove,PortOrford,RogueReef,Brookings,CrescentCity,Trinidad,ShelterCove,HouseCove,VanDamme,SaltPoint,TimberCove,MunizRanch,BodegaBay,PointReyes,FarallonesIsland,Monterey,MorroBay,SanMiguelIsle,SanPedro,PointLoma,Ensenada,SantoTomas,PuntaSanJose
+
+Rscript ../Admixture/plotADMIXTURE.r -p plink_outflank -i ../Admixture/Admixture_year_list_noLowDP -k 3 -l 1998,1999,2003,2007,2008,2009,2010,2011,2014,2016,2020,2021
+
+#identify best value of k cluster which is value with lowest cross-validation error
+#awk '/CV/ {print $3,$4}' *plink_outflank.out | cut -c 4,7-20 > plink_outflank.cv.error
+#change name of chromosomes first:
+awk '{$1="0";print $0}' plink_pcadapt.bim > plink_pcadapt.bim.tmp
+mv plink_pcadapt.bim.tmp plink_pcadapt.bim
+
+###########
+#PCAdapt
+###########
+
+##change name of chromosomes first:
+awk '{$1="0";print $0}' plink_pcadapt.bim > plink_pcadapt.bim.tmp
+mv plink_pcadapt.bim.tmp plink_pcadapt.bim
+
+##run admixture:
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 1 > log1.plink_pcadapt.out
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 2 > log2.plink_pcadapt.out
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 3 > log3.plink_pcadapt.out
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 4 > log4.plink_pcadapt.out
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 5 > log5.plink_pcadapt.out
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 6 > log6.plink_pcadapt.out
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 7 > log7.plink_pcadapt.out
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 8 > log8.plink_pcadapt.out
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 9 > log9.plink_pcadapt.out
+../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 10 > log10.plink_pcadapt.out
+#../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 11 > log11.plink_pcadapt.out
+#../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 12 > log12.plink_pcadapt.out
+#../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 13 > log13.plink_pcadapt.out
+#../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 14 > log14.plink_pcadapt.out
+#../admixture_linux-1.3.0/admixture --cv plink_pcadapt.bed 15 > log15.plink_pcadapt.out
+
+##identify best value of k cluster which is value with lowest cross-validation error
+awk '/CV/ {print $3,$4}' *plink_pcadapt.out | cut -c 4,7-20 > plink_pcadapt.cv.error
+
+
+#PLOT IN R:
+#the prefix for the ADMIXTURE output files (-p ), the file with the population information (-i ), the maximum number of K to be plotted (-k 5), and a list with the populations or species separated by commas (-l <pop1,pop2...>). The list of populations provided with -l gives the order in which the populations or species shall be plotted
+#move over relevant files to Adixture directory!
+module load R/3.6.3
+
+Rscript ../Admixture/plotADMIXTURE.r -p plink_pcadapt -i ../Admixture/Admixture_pop_list_noLowDP -k 3 -l CharlestonSouthCove,PortOrford,RogueReef,Brookings,CrescentCity,Trinidad,ShelterCove,HouseCove,VanDamme,SaltPoint,TimberCove,MunizRanch,BodegaBay,PointReyes,FarallonesIsland,Monterey,MorroBay,SanMiguelIsle,SanPedro,PointLoma,Ensenada,SantoTomas,PuntaSanJose
+
+Rscript ../Admixture/plotADMIXTURE.r -p plink_pcadapt -i ../Admixture/Admixture_year_list_noLowDP -k 3 -l 1998,1999,2003,2007,2008,2009,2010,2011,2014,2016,2020,2021
+```
+
+
+
+
+
+# Genome-Environment Association
+
+Now let's see if there are any SNPs across populations that are associated with different environmental variables.
+First let's download some environmental data from a few sources and match the coordinates with the abalone sample collection locations. Let's start off with data from BioOracle: https://www.bio-oracle.org/code.php
+
+```{r eval=FALSE}
+
+# devtools::install_github("bcm-uga/lfmm")
+# 
+# 
+# # get packages
+# install.packages(c('lfmm','psych','vegan','ggplot2','data.table','sdmpredictors','rgdal','raster'), dependencies = T)
+# install.packages("BiocManager")
+# BiocManager::install("LEA", force=T)
+
+#https://www.bio-oracle.org/code.php
+
+library(lfmm)
+library(psych)
+library(vegan)
+library(LEA)
+library(data.table)
+library(sdmpredictors) #contains datasets
+library(leaflet)#contains datasets
+library(ggplot2)
+library(rgdal)
+library(raster)
+
+####################
+#BioOracle Data
+####################
+
+#raster in R: https://www.neonscience.org/resources/learning-hub/tutorials/raster-data-r
+
+setwd("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GEA")
+
+
+#explore datasets: only BioOracle and MARSPEC are marine 
+list_datasets()
+#explore marine layers
+list_datasets(dataset_code=c("Bio-ORACLE", "MARSPEC"))
+BioOracle <- list_layers(datasets="Bio-ORACLE")
+
+#load the environmental data and store it as objects that we can use later
+environ <- load_layers(layercodes = c("BO_chlomean","BO_ph", "BO_salinity","BO_sstmax","BO_sstmean", "BO_sstmin", "BO_sstrange"))
+
+#meansst <- load_layers("BO_sstmean")
+
+#now put each layer into it's own object
+chlomean<-load_layers("BO_chlomean")
+ph<-load_layers("BO_ph")
+salinity<-load_layers("BO_salinity")
+sst_max<-load_layers("BO_sstmax")
+sst_mean<-load_layers("BO_sstmean")
+sst_min<-load_layers("BO_sstmin")
+sst_range<-load_layers("BO_sstrange")
+
+
+#Now we'll read in our metadata, which has lat and lon for each sample
+meta <- read.delim2("../CCGP_metafile_for_analyses.txt")
+meta$COLLECTION_YEAR <- as.factor(meta$COLLECTION_YEAR)
+meta$LIBRARY_PLATE <- as.factor(meta$LIBRARY_PLATE)
+meta$PointConception <- as.factor(meta$PointConception)
+meta$LOCATION <- as.factor(meta$LOCATION)
+meta$LOCATION <-factor(meta$LOCATION, levels = c("CharlestonSouthCove", "PortOrford", "RogueReef", "BrookingsHooskanadenCreek", "BrookingsLoneRanch", "Brookings",
+                                                         "CrescentCity", "Trinidad", "ShelterCove", "HouseCove", "VanDamme", "SaltPoint", "TimberCove", "MunizRanch", "BodegaBay", "PointReyes",
+                                                         "FarallonesIsland",  "Monterey",  "MorroBayPupRock", "MorroBayDiabloCove", "MorroBayPattonCove", "SanMiguelIsle", "SanPedro", "PointLoma", "Ensenada", "SantoTomas", "PuntaSanJose"))
+meta$LAT_DD<- as.numeric(meta$LAT_DD)
+meta$LONG_DD<- as.numeric(meta$LONG_DD)
+
+vcf_samples <- read.delim2("samples_in_vcf", header=TRUE)
+newmeta <- merge(meta, vcf_samples, by="LIB_SAMPLE")
+newmeta$line_num <- 1:nrow(newmeta) #add line numbers
+
+#write.table(newmeta, file="CCGP_metafile_vcf_sample_names", quote = F,row.names = F) #opened in excel and added vcf names
+newmeta_vcf_names <- read.delim2("CCGP_metafile_vcf_sample_names", header=TRUE)
+newmeta_vcf_names$line_num <- 1:nrow(newmeta_vcf_names) #add line numbers
+
+
+#make a new dataframe that just contains the lat and lon and label them "lat" and "long"
+sites<-cbind("lon" = newmeta$LONG_DD, "lat" =  newmeta$LAT_DD) #note that long has to be in first column and lat in second otherwise it wont work
+
+
+#Extract Site Specific Information from our Envirornmental Layers
+sites_environ <- data.frame(Name=sites, extract(environ,sites))
+head(sites_environ)
+sites_environ$line_num <- 1:nrow(sites_environ) #add line numbers
+
+sites_environ_samples <- merge(newmeta, sites_environ, by="line_num") #merge with metadata so you know which samples have NA for environmental data
+
+#remove any Na's
+sites_environ_nas<-na.omit(sites_environ_samples)
+samples_keep_GEA <- c(sites_environ_nas$LIB_SAMPLE)
+#write(samples_keep_GEA, file="samples_keep_GEA") #edit in excel to vcf sample names
+
+
+##remove all columns except environmental data
+sites_environ_matrix<-as.matrix(sites_environ_nas[,c(15,16,17,18,19,20,21)])
+
+##write the file to an env file
+write.env(sites_environ_matrix, "sites_environ_matrix.env")
+
+sites_environ_matrix <- read.table("sites_environ_matrix.env")
+
+######################
+#Make a Map of our environmental data
+#########################
+
+#We now have enough information to make a pretty plot of one of our environmental parameters.
+#download a raster file for env variable that we want to look at
+#what are are min amd max lat and lon
+
+range(sites_environ$Name.lon)
+#-124.5022 -116.5906
+range(sites_environ$Name.lat)
+#31.46264 43.34014
+
+
+#crop file to fit the area we want
+ne.pacific<-extent(-130, -115, 30, 45)
+
+sst_max.crop<-crop(sst_max, ne.pacific)
+sst_mean.crop<-crop(sst_mean, ne.pacific)
+salinity.crop<-crop(salinity, ne.pacific)
+ph.crop<-crop(ph, ne.pacific)
+chlomean.crop<-crop(chlomean, ne.pacific)
+
+
+#make a nice color ramp and plot the map
+
+my.colors = colorRampPalette(c("#5E85B8","#EDF0C0","#C13127"))
+
+windows()
+plot(sst_max.crop,col=my.colors(1000),axes=TRUE, box=FALSE)
+title(cex.sub = 1.25, sub = "Maximum temperature at the sea surface (?C)")
+
+windows()
+plot(sst_mean.crop,col=my.colors(1000),axes=TRUE, box=FALSE)
+title(cex.sub = 1.25, sub = "Mean temperature at the sea surface (?C)")
+
+windows()
+plot(salinity.crop,col=my.colors(1000),axes=TRUE, box=FALSE)
+title(cex.sub = 1.25, sub = "Mean Salinity at the sea surface (psu)")
+
+windows()
+plot(ph.crop,col=my.colors(1000),axes=TRUE, box=FALSE)
+title(cex.sub = 1.25, sub = " Mean pH at the sea surface ")
+
+windows()
+plot(chlomean.crop,col=my.colors(1000),axes=TRUE, box=FALSE)
+title(cex.sub = 1.25, sub = "Mean Chlorophyll content at the sea surface")
+```
+
+
+Let's make the environmental data from CUTI and BEUTI
+It is designed for 1 degree latitude bins, so need to round up/down lat data, see figure: https://mjacox.com/upwelling-indices/
+The data has daily measurements across multiple years, so we need to summarize the data first.
+```{r eval=FALSE}
+
+###########################
+#Upwelling indices
+#############################
+#designed for 1 degree latitude bins, so need to round up/down lat data, see figure: https://mjacox.com/upwelling-indices/
+
+setwd("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GEA")
+
+meta <- read.delim2("CCGP_metafile_vcf_sample_names", header=TRUE)
+meta$COLLECTION_YEAR <- as.factor(meta$COLLECTION_YEAR)
+meta$LIBRARY_PLATE <- as.factor(meta$LIBRARY_PLATE)
+meta$PointConception <- as.factor(meta$PointConception)
+meta$LOCATION <- as.factor(meta$LOCATION)
+meta$LOCATION <-factor(meta$LOCATION, levels = c("CharlestonSouthCove", "PortOrford", "RogueReef", "BrookingsHooskanadenCreek", "BrookingsLoneRanch", "Brookings",
+                                                 "CrescentCity", "Trinidad", "ShelterCove", "HouseCove", "VanDamme", "SaltPoint", "TimberCove", "MunizRanch", "BodegaBay", "PointReyes",
+                                                 "FarallonesIsland",  "Monterey",  "MorroBayPupRock", "MorroBayDiabloCove", "MorroBayPattonCove", "SanMiguelIsle", "SanPedro", "PointLoma", "Ensenada", "SantoTomas", "PuntaSanJose"))
+meta$LAT_DD<- as.numeric(meta$LAT_DD)
+meta$LONG_DD<- as.numeric(meta$LONG_DD)
+
+#round to nearest sigfig to match upwelling data chunks
+meta$LAT <- signif(meta$LAT_DD, digits = 2)
+
+##########
+#CUTI data
+########
+load("Upwelling.env.RData") #load both cuti and beuti data
+
+
+cuti <- read.delim2("Environmental_Data/CUTI_daily.txt", header=T)
+cuti <- sapply(cuti, as.numeric) #make all columns numeric
+cuti <- as.data.frame(cuti)
+
+cuti_mean <- sapply(cuti, mean) 
+cuti_mean <- as.data.frame(sapply(cuti[,4:20], mean))
+
+cuti_mean <- apply(cuti[,4:20], mean)
+cuti_mean2 <- apply(X=cuti[,4:20], MARGIN=2, FUN=mean) #margin means rows(1), or columns(2)
+
+
+
+cuti_X31N <- cuti[,c(1:4)]
+names(cuti_X31N)[4] ="Upwelling"
+cuti_X31N$LAT <- rep(31,nrow(cuti_X31N))
+cuti_X32N <- cuti[,c(1:3,5)]
+names(cuti_X32N)[4] ="Upwelling"
+cuti_X32N$LAT <- rep(32,nrow(cuti_X32N))
+cuti_X33N <- cuti[,c(1:3,6)]
+names(cuti_X33N)[4] ="Upwelling"
+cuti_X33N$LAT <- rep(33,nrow(cuti_X33N))
+cuti_X34N <- cuti[,c(1:3,7)]
+names(cuti_X34N)[4] ="Upwelling"
+cuti_X34N$LAT <- rep(34,nrow(cuti_X34N))
+cuti_X35N <- cuti[,c(1:3,8)]
+names(cuti_X35N)[4] ="Upwelling"
+cuti_X35N$LAT <- rep(35,nrow(cuti_X35N))
+cuti_X36N <- cuti[,c(1:3,9)]
+names(cuti_X36N)[4] ="Upwelling"
+cuti_X36N$LAT <- rep(36,nrow(cuti_X36N))
+cuti_X37N <- cuti[,c(1:3,10)]
+names(cuti_X37N)[4] ="Upwelling"
+cuti_X37N$LAT <- rep(37,nrow(cuti_X37N))
+cuti_X38N <- cuti[,c(1:3,11)]
+names(cuti_X38N)[4] ="Upwelling"
+cuti_X38N$LAT <- rep(38,nrow(cuti_X38N))
+cuti_X39N <- cuti[,c(1:3,12)]
+names(cuti_X39N)[4] ="Upwelling"
+cuti_X39N$LAT <- rep(39,nrow(cuti_X39N))
+cuti_X40N <- cuti[,c(1:3,13)]
+names(cuti_X40N)[4] ="Upwelling"
+cuti_X40N$LAT <- rep(40,nrow(cuti_X40N))
+cuti_X41N <- cuti[,c(1:3,14)]
+names(cuti_X41N)[4] ="Upwelling"
+cuti_X41N$LAT <- rep(41,nrow(cuti_X41N))
+cuti_X42N <- cuti[,c(1:3,15)]
+names(cuti_X42N)[4] ="Upwelling"
+cuti_X42N$LAT <- rep(42,nrow(cuti_X42N))
+cuti_X43N <- cuti[,c(1:3,16)]
+names(cuti_X43N)[4] ="Upwelling"
+cuti_X43N$LAT <- rep(43,nrow(cuti_X43N))
+cuti_X44N <- cuti[,c(1:3,17)]
+names(cuti_X44N)[4] ="Upwelling"
+cuti_X44N$LAT <- rep(44,nrow(cuti_X44N))
+cuti_X45N <- cuti[,c(1:3,18)]
+names(cuti_X45N)[4] ="Upwelling"
+cuti_X45N$LAT <- rep(45,nrow(cuti_X45N))
+cuti_X46N <- cuti[,c(1:3,19)]
+names(cuti_X46N)[4] ="Upwelling"
+cuti_X46N$LAT <- rep(46,nrow(cuti_X46N))
+cuti_X47N <- cuti[,c(1:3,20)]
+names(cuti_X47N)[4] ="Upwelling"
+cuti_X47N$LAT <- rep(47,nrow(cuti_X47N))
+
+cuti_all <- rbind(cuti_X31N, cuti_X32N, cuti_X33N, cuti_X34N, cuti_X35N, cuti_X36N, cuti_X37N, cuti_X38N, cuti_X39N, cuti_X40N, cuti_X41N, cuti_X42N, cuti_X43N, cuti_X44N, cuti_X45N, cuti_X46N, cuti_X47N)
+
+
+##########function for finding mean, mean of top 10% of data, and mean of top 5% of data by year and latitude
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      meantop10 = mean(x[[col]][x[[col]]>=quantile(x[[col]], 0.9)]),
+      meantop5 = mean(x[[col]][x[[col]]>=quantile(x[[col]], 0.95)]),
+      range = range(x[[col]]),
+      stdev =  sd(x[[col]]))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+cuti_lat_year <- data_summary(cuti_all, varname="Upwelling", 
+                    groupnames=c("year", "LAT"))
+cuti_lat_year$range_tot <- cuti_lat_year$range2 - cuti_lat_year$range1
+
+#code below is testing that the above function is working correctly:
+cuti_1988<- subset(cuti, year=="1988")
+mean(cuti_1988$X31N[cuti_1988$X31N>=quantile(cuti_1988$X31N, 0.9)]) #finds mean of top 10% of data, keep this line of code as an example, because its very confusing in the function above
+mean(cuti_1988$X31N[cuti_1988$X31N>=quantile(cuti_1988$X31N, 0.95)]) #finds mean of top 5% of data, keep this line of code as an example, because its very confusing in the data below
+
+
+##########function for finding mean, mean of top 10% of data, and mean of top 5% of data by latitude ONLY
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      meantop10 = mean(x[[col]][x[[col]]>=quantile(x[[col]], 0.9)]),
+      meantop5 = mean(x[[col]][x[[col]]>=quantile(x[[col]], 0.95)]),
+      range = range(x[[col]]),
+      stdev =  sd(x[[col]]))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+cuti_lat <- data_summary(cuti_all, varname="Upwelling", 
+                    groupnames=c("LAT"))
+cuti_lat$range_tot <- cuti_lat$range2 - cuti_lat$range1
+
+newmeta_vcf_names$LAT_DD <- as.numeric(newmeta_vcf_names$LAT_DD)
+newmeta_vcf_names$LAT <- round(newmeta_vcf_names$LAT_DD)
+sites_environ_cuti <- merge(newmeta_vcf_names, cuti_lat, by="LAT") 
+
+
+
+###################
+#BEUTI data
+###################
+beuti <- read.delim2("Environmental_Data/beuti_daily.txt", header=T)
+beuti <- sapply(beuti, as.numeric) #make all columns numeric
+beuti <- as.data.frame(beuti)
+
+beuti_mean <- sapply(beuti, mean) 
+beuti_mean <- as.data.frame(sapply(beuti[,4:20], mean))
+
+beuti_mean <- apply(beuti[,4:20], mean)
+beuti_mean2 <- apply(X=beuti[,4:20], MARGIN=2, FUN=mean) #margin means rows(1), or columns(2)
+
+
+
+beuti_X31N <- beuti[,c(1:4)]
+names(beuti_X31N)[4] ="Upwelling"
+beuti_X31N$LAT <- rep(31,nrow(beuti_X31N))
+beuti_X32N <- beuti[,c(1:3,5)]
+names(beuti_X32N)[4] ="Upwelling"
+beuti_X32N$LAT <- rep(32,nrow(beuti_X32N))
+beuti_X33N <- beuti[,c(1:3,6)]
+names(beuti_X33N)[4] ="Upwelling"
+beuti_X33N$LAT <- rep(33,nrow(beuti_X33N))
+beuti_X34N <- beuti[,c(1:3,7)]
+names(beuti_X34N)[4] ="Upwelling"
+beuti_X34N$LAT <- rep(34,nrow(beuti_X34N))
+beuti_X35N <- beuti[,c(1:3,8)]
+names(beuti_X35N)[4] ="Upwelling"
+beuti_X35N$LAT <- rep(35,nrow(beuti_X35N))
+beuti_X36N <- beuti[,c(1:3,9)]
+names(beuti_X36N)[4] ="Upwelling"
+beuti_X36N$LAT <- rep(36,nrow(beuti_X36N))
+beuti_X37N <- beuti[,c(1:3,10)]
+names(beuti_X37N)[4] ="Upwelling"
+beuti_X37N$LAT <- rep(37,nrow(beuti_X37N))
+beuti_X38N <- beuti[,c(1:3,11)]
+names(beuti_X38N)[4] ="Upwelling"
+beuti_X38N$LAT <- rep(38,nrow(beuti_X38N))
+beuti_X39N <- beuti[,c(1:3,12)]
+names(beuti_X39N)[4] ="Upwelling"
+beuti_X39N$LAT <- rep(39,nrow(beuti_X39N))
+beuti_X40N <- beuti[,c(1:3,13)]
+names(beuti_X40N)[4] ="Upwelling"
+beuti_X40N$LAT <- rep(40,nrow(beuti_X40N))
+beuti_X41N <- beuti[,c(1:3,14)]
+names(beuti_X41N)[4] ="Upwelling"
+beuti_X41N$LAT <- rep(41,nrow(beuti_X41N))
+beuti_X42N <- beuti[,c(1:3,15)]
+names(beuti_X42N)[4] ="Upwelling"
+beuti_X42N$LAT <- rep(42,nrow(beuti_X42N))
+beuti_X43N <- beuti[,c(1:3,16)]
+names(beuti_X43N)[4] ="Upwelling"
+beuti_X43N$LAT <- rep(43,nrow(beuti_X43N))
+beuti_X44N <- beuti[,c(1:3,17)]
+names(beuti_X44N)[4] ="Upwelling"
+beuti_X44N$LAT <- rep(44,nrow(beuti_X44N))
+beuti_X45N <- beuti[,c(1:3,18)]
+names(beuti_X45N)[4] ="Upwelling"
+beuti_X45N$LAT <- rep(45,nrow(beuti_X45N))
+beuti_X46N <- beuti[,c(1:3,19)]
+names(beuti_X46N)[4] ="Upwelling"
+beuti_X46N$LAT <- rep(46,nrow(beuti_X46N))
+beuti_X47N <- beuti[,c(1:3,20)]
+names(beuti_X47N)[4] ="Upwelling"
+beuti_X47N$LAT <- rep(47,nrow(beuti_X47N))
+
+beuti_all <- rbind(beuti_X31N, beuti_X32N, beuti_X33N, beuti_X34N, beuti_X35N, beuti_X36N, beuti_X37N, beuti_X38N, beuti_X39N, beuti_X40N, beuti_X41N, beuti_X42N, beuti_X43N, beuti_X44N, beuti_X45N, beuti_X46N, beuti_X47N)
+save(beuti_all, cuti_all, file="Upwelling.env.RData")
+
+##########function for finding mean, mean of top 10% of data, and mean of top 5% of data by year and latitude
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      meantop10 = mean(x[[col]][x[[col]]>=quantile(x[[col]], 0.9)]),
+      meantop5 = mean(x[[col]][x[[col]]>=quantile(x[[col]], 0.95)]),
+      range = range(x[[col]]),
+      stdev =  sd(x[[col]]))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+beuti_lat_year <- data_summary(beuti_all, varname="Upwelling", 
+                              groupnames=c("year", "LAT"))
+
+
+
+
+#code below is testing that the above function is working correctly:
+beuti_1988<- subset(beuti, year=="1988")
+mean(beuti_1988$X31N[beuti_1988$X31N>=quantile(beuti_1988$X31N, 0.9)]) #finds mean of top 10% of data, keep this line of code as an example, because its very confusing in the function above
+mean(beuti_1988$X31N[beuti_1988$X31N>=quantile(beuti_1988$X31N, 0.95)]) #finds mean of top 5% of data, keep this line of code as an example, because its very confusing in the data below
+
+
+##########function for finding mean, mean of top 10% of data, and mean of top 5% of data by latitude ONLY
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      meantop10 = mean(x[[col]][x[[col]]>=quantile(x[[col]], 0.9)]),
+      meantop5 = mean(x[[col]][x[[col]]>=quantile(x[[col]], 0.95)]),
+      range = range(x[[col]]),
+      stdev =  sd(x[[col]]))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+
+beuti_lat <- data_summary(beuti_all, varname="Upwelling", 
+                         groupnames=c("LAT"))
+beuti_lat$range_tot <- beuti_lat$range2 - beuti_lat$range1
+
+newmeta_vcf_names$LAT_DD <- as.numeric(newmeta_vcf_names$LAT_DD)
+newmeta_vcf_names$LAT <- round(newmeta_vcf_names$LAT_DD)
+sites_environ_beuti <- merge(newmeta_vcf_names, beuti_lat, by="LAT")
+
+
+
+sites_environ_cuti_beuti <- merge(sites_environ_cuti, sites_environ_beuti, by="LIB_SAMPLE")
+
+sites_environ_cuti_beuti <- sites_environ_cuti_beuti[c("Upwelling.x", "Upwelling.y", "meantop5.x", "meantop5.y","meantop10.x", "meantop10.y", "range_tot.x", "range_tot.y", "stdev.x","stdev.y")]
+write.env(sites_environ_cuti_beuti, "sites_environ_cuti_beuti.env")
+```
+
+Move this file onto FARM `sites_environ_cuti_beuti.env`
+Make a copy of the vcf file so you can shorten its name for the upwelling tests:
+`cp NoSibs.noAnnotations.pop.missing5mac3maf.recode.vcf.plink.LDfiltered_0.8.vcf Upwelling.vcf`
+
+
+
+## lfmm2 Analysis
+Move the following files to FARM: `sites_environ_matrix.env`, `samples_keep_GEA`
+
+Now in the following script `GEA.sh`, let's subset the vcf file with the samples that had environmental data in the `samples_keep_GEA` list. 
+```{bash eval=FALSE}
+
+#!/bin/bash
+
+#SBATCH -D /home/jsgriffi
+#SBATCH --job-name=GEA
+#SBATCH --mem=250G
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH -o /group/awhitehegrp/joanna/73-Haliotis/output_files/out-%A.%a_GEA.txt
+#SBATCH -e /group/awhitehegrp/joanna/73-Haliotis/output_files/error-%A.%a_GEA.txt
+#SBATCH --time=100:00:00
+#SBATCH --mail-user=jsgriffiths@ucdavis.edu
+#SBATCH --mail-type=ALL
+#SBATCH -p high2
+
+
+cd /group/awhitehegrp/joanna/73-Haliotis/GEA
+
+module load deprecated/bio/1.0
+
+#remove samples with no environmental data. Note that were are starting with the non-LD filtered. This only needs to be done for the BioOracle data. No samples were missing for the Upwelling data
+vcftools --vcf ../NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf --keep samples_keep_GEA_noLD --recode --recode-INFO-all --out BioOracle_GEA_noLD_nosex
+
+module load deprecated/plink/1.90
+#create needed plink files
+plink --vcf BioOracle_GEA_noLD_nosex.recode.vcf --allow-extra-chr --out BioOracle_GEA_noLD_nosex.plink
+
+plink --bfile BioOracle_GEA_noLD_nosex.plink --allow-extra-chr --recode --tab --out BioOracle_GEA_noLD_nosex.plink
+```
+
+
+
+Now we can run the GEA analysis below. Submit the following lines of the script `GEA.sh`
+Make sure to manually and interactively install the R packages in `GEA_lfmm2.r' before you submit and then comment them out in the script.The main R package we're using is LEA which has a great reference manual here: http://membres-timc.imag.fr/Olivier.Francois/LEA/files/LEA_github.pdf
+
+Good example paper to read: https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0283351#sec028
+
+```{bash eval=FALSE}
+#make sure you unload the module before running the R script below because otherwise there are R library incompatibilities!
+module unload deprecated/bio/1.0
+
+module load R/4.2.3
+Rscript GEA_BioOracle_lfmm2_noLD.r --save --verbose
+Rscript GEA_upwelling_lfmm2.r --save --verbose
+```
+
+Troubleshooting GEA:
+```
+Error: unable to read file BioOracle_GEA_noLD_nosex.recode.vcf. It seems that line 9837 contains 164 columns instead of 169 (number of columns of line 1)
+```
+
+I checked line 9837, but had the correct number of columns. I noticed that the geno file stops after line 9836, so I checked line 10492, which is 656 lines where geno info starts in vcf file after the header info. Still had correct number of columns
+
+sed -n '10492,10492p;10493q' BioOracle_GEA_noLD_nosex.recode.vcf > line10492
+awk '{print NF}' line10492
+
+**I ended up fixing these errors by giving lfmm2 the plink files as input instead of the vcf files.**
+
+
+This is the content in the `GEA_BioOracle_lfmm2_noLD.r` file:
+```{r eval=FALSE}
+
+##load in genetic data
+##convert our vcf file to lfmm
+##had trouble with vcf2lfmm so converted to ped format first and then tried ped2lfmm:
+##vcf2lfmm("BioOracle_GEA_noLD_nosex.recode.vcf", "BioOracle_GEA_noLD.recode.lfmm")
+ped2lfmm("BioOracle_GEA_noLD_nosex.plink.ped", "BioOracle_GEA_noLD_nosex.recode.lfmm")
+red_ab_lfmm <- read.lfmm("BioOracle_GEA_noLD_nosex.recode.lfmm")
+
+##save(red_ab_lfmm, file="red_ab_lfmm.RData")
+
+##and convert to geno
+lfmm2geno("BioOracle_GEA_noLD_nosex.recode.lfmm", "BioOracle_GEA_noLD_nosex.recode.geno")
+red_ab_geno <- read.geno("BioOracle_GEA_noLD_nosex.recode.geno")
+
+## create a snmf object. If the code gets stuck after creating the geno file and doesn't create the snmf but doesn't error out, you just need to cancel and resubmit with the above code commented out.
+red_ab.snmf <- snmf("BioOracle_GEA_noLD_nosex.recode.geno", K = 1:10, repetitions=10, entropy=T, ploidy = 2, project = "new")
+
+##save(red_ab_geno, red_ab.snmf, file="GEA_geno_snmf_noLD.RData")
+
+project=load.snmfProject("BioOracle_GEA_noLD_nosex.recode.snmfProject")
+
+##select the run with the lowest cross-entropy value
+best = which.min(cross.entropy(project, K=1))
+
+##impute missing genotypes
+impute(project, "BioOracle_GEA_noLD_nosex.recode.lfmm", method='mode', K=1, run = best)
+
+##plot values of cross-entropy criteron of k
+plot(project)
+tiff("red_ab_snmf_plot.tiff")
+plot()
+dev.off()
+
+## check results of plot for which K value to use in next step. Choose K with smalled cross-entropy
+## Genome scan for selection using environmental variables. Select one below and comment out the rest
+redab_lfmm <- lfmm2("BioOracle_GEA_noLD_nosex.recode.lfmm_imputed.lfmm", "sites_environ_matrix.env", K=1)
+save(redab_lfmm, file="BioOracle_GEA_noLD_nosex.recode_lfmm2.RData")
+
+load("BioOracle_GEA_noLD_nosex.recode_lfmm2.RData")
+pv <- lfmm2.test(object= redab_lfmm, input = "BioOracle_GEA_noLD_nosex.recode.lfmm_imputed.lfmm", env = "sites_environ_matrix.env")
+save(pv, file="BioOracle_GEA_noLD_nosex_pv.RData")
+```
+
+
+
+
+Here are the contents of the `GEA_upwelling_lfmm2.r`
+```{bash eval=FALSE}
+#install.packages("BiocManager")
+#BiocManager::install("LEA", force=T)
+#install.packages("lfmm")
+#library("lfmm") #don't use this. When this is on it overrides LEA and then doesn't recognize lfmm2 as a function from the LEA package
+library("LEA")
+
+setwd("/group/awhitehegrp/joanna/73-Haliotis/GEA")
+
+##load in genetic data
+##convert our vcf file to lfmm
+##had trouble with vcf2lfmm so converted to ped format first and then tried ped2lfmm:
+##vcf2lfmm("BioOracle_GEA_noLD_nosex.recode.vcf", "BioOracle_GEA_noLD.recode.lfmm")
+
+ped2lfmm("../NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.plink.ped", "Upwelling_GEA_noLD_nosex.lfmm")
+red_ab_lfmm <- read.lfmm("Upwelling_GEA_noLD_nosex.lfmm")
+##save(red_ab_lfmm, file="red_ab_lfmm.RData")
+
+##and convert to geno
+lfmm2geno("Upwelling_GEA_noLD_nosex.lfmm", "Upwelling_GEA_noLD_nosex.geno")
+red_ab_geno <- read.geno("Upwelling_GEA_noLD_nosex.geno")
+
+## create a snmf object. If the code gets stuck after creating the geno file and doesn't create the snmf but doesn't error out, you just need to cancel and resubmit with the above code commented out.
+red_ab.snmf <- snmf("Upwelling_GEA_noLD_nosex.geno", K = 1:10, repetitions=10, entropy=T, ploidy = 2, project = "new")
+
+#save(red_ab_geno, red_ab.snmf, file="GEA_geno_snmf.RData")
+
+project=load.snmfProject("Upwelling_GEA_noLD_nosex.snmfProject")
+
+##select the run with the lowest cross-entropy value. Try with different runs of K
+best = which.min(cross.entropy(project, K=1))
+
+##impute missing genotypes
+impute(project, "Upwelling_GEA_noLD_nosex.lfmm", method='mode', K=1, run = best)
+
+##plot values of cross-entropy criteron of k
+plot(project)
+tiff("red_ab_snmf_plot.tiff")
+plot()
+dev.off()
+
+## check results of plot for which K value to use in next step. Choose K with smalled cross-entropy
+redab_lfmm <- lfmm2("Upwelling_GEA_noLD_nosex.lfmm_imputed.lfmm", "sites_environ_cuti_beuti.env", K=1)
+save(redab_lfmm, file="Upwelling_lfmm2.RData")
+
+#load("BioOracle_lfmm2.RData")
+pv <- lfmm2.test(object= redab_lfmm, input = "Upwelling_GEA_noLD_nosex.lfmm_imputed.lfmm", env = "sites_environ_cuti_beuti.env")
+save(pv, file="Upwelling_pv.RData")
+```
+
+
+### Plot Results of lfmm2 GEA output
+
+```{r eval=FALSE}
+
+#########################################
+#Graphing BioOracle Results with lfmm2()
+#######################################
+library("tidyr")
+library("qqman")
+
+
+setwd("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GEA")
+
+#import bim file with chr and snp location info (I edited the bim file to turn spaces into tabs and called the new file SNP_IDs)
+chrsnp <- read.delim2("../outlier_analyses/SNP_IDs_noLD", header=F)
+chrsnp$line_num <- 1:nrow(chrsnp) #add line numbers
+chrsnp <- chrsnp[,c(2, 7)]
+
+#Turn bad chr names into nice numbered scaffold names
+chrsnp <- separate(data = chrsnp, col = "V2", into = c("CHR", "SNP"), sep = "\\:", remove = FALSE)
+GCA_contigs <- read.delim2("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GO/GCA_contigs.txt", header=T)
+colnames(GCA_contigs) = c("CHR", "SCAF")
+
+chrsnp2 <- merge(chrsnp, GCA_contigs, by ="CHR")
+chrsnp2$SCAF <- gsub("SCAF_","",as.character(chrsnp2$SCAF))
+rm(chrsnp)
+
+chrsnp2$SCAF<- as.numeric(chrsnp2$SCAF)
+chrsnp2$SNP<- as.numeric(chrsnp2$SNP)
+rm(GCA_contigs)
+
+
+####load BioOracle GEA results
+setwd("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GEA")
+load("BioOracle_GEA_noLD_nosex_pv.RData")
+
+test<- data.frame(pv$pvalues)
+test2 <- t(test)
+
+chlor <- test2[,1]
+pH <- test2[,2]
+sal <- test2[,3]
+maxSST <- test2[,4]
+meanSST <- test2[,5]
+minSST <- test2[,6]
+rangeSST <- test2[,7]
+
+########Chlorophyll
+chlor <- data.frame(chlor)
+colnames(chlor) = "pval"
+chlor$line_num <- 1:nrow(chlor)
+chrsnp_chlor <- merge(chlor, chrsnp2, by ="line_num")
+chrsnp_chlor<- chrsnp_chlor[,c(1,2,4,5,6)]
+
+chrsnp_chlor$SCAF<- as.numeric(chrsnp_chlor$SCAF)
+chrsnp_chlor$SNP<- as.numeric(chrsnp_chlor$SNP)
+chrsnp_chlor$pval<- as.numeric(chrsnp_chlor$pval)
+windows()
+manhattan(chrsnp_chlor, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+########pH
+pH <- data.frame(pH)
+colnames(pH) = "pval"
+pH$line_num <- 1:nrow(pH)
+chrsnp_pH <- merge(pH, chrsnp2, by ="line_num")
+chrsnp_pH<- chrsnp_pH[,c(1,2,4,5,6)]
+
+chrsnp_pH$SCAF<- as.numeric(chrsnp_pH$SCAF)
+chrsnp_pH$SNP<- as.numeric(chrsnp_pH$SNP)
+chrsnp_pH$pval<- as.numeric(chrsnp_pH$pval)
+windows()
+manhattan(chrsnp_pH, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+########salinity
+sal <- data.frame(sal)
+colnames(sal) = "pval"
+sal$line_num <- 1:nrow(sal)
+chrsnp_sal <- merge(sal, chrsnp2, by ="line_num")
+chrsnp_sal<- chrsnp_sal[,c(1,2,4,5,6)]
+
+chrsnp_sal$SCAF<- as.numeric(chrsnp_sal$SCAF)
+chrsnp_sal$SNP<- as.numeric(chrsnp_sal$SNP)
+chrsnp_sal$pval<- as.numeric(chrsnp_sal$pval)
+windows()
+manhattan(chrsnp_sal, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+########maxSST
+maxSST <- data.frame(maxSST)
+colnames(maxSST) = "pval"
+maxSST$line_num <- 1:nrow(maxSST)
+chrsnp_maxSST <- merge(maxSST, chrsnp2, by ="line_num")
+chrsnp_maxSST<- chrsnp_maxSST[,c(1,2,4,5,6)]
+
+chrsnp_maxSST$SCAF<- as.numeric(chrsnp_maxSST$SCAF)
+chrsnp_maxSST$SNP<- as.numeric(chrsnp_maxSST$SNP)
+chrsnp_maxSST$pval<- as.numeric(chrsnp_maxSST$pval)
+windows()
+manhattan(chrsnp_maxSST, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+maxSST_outliers <- subset(chrsnp_maxSST, pval < (0.05/1085778))
+write.table(maxSST_outliers,file = "GEA_BioOracle_maxSST_outliers", quote = F,row.names = F,col.names = F, sep = "\t")
+
+########mean SST
+meanSST <- data.frame(meanSST)
+colnames(meanSST) = "pval"
+meanSST$line_num <- 1:nrow(meanSST)
+chrsnp_meanSST <- merge(meanSST, chrsnp2, by ="line_num")
+chrsnp_meanSST<- chrsnp_meanSST[,c(1,2,4,5,6)]
+
+chrsnp_meanSST$SCAF<- as.numeric(chrsnp_meanSST$SCAF)
+chrsnp_meanSST$SNP<- as.numeric(chrsnp_meanSST$SNP)
+chrsnp_meanSST$pval<- as.numeric(chrsnp_meanSST$pval)
+windows()
+manhattan(chrsnp_meanSST, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+########min SST
+minSST <- data.frame(minSST)
+colnames(minSST) = "pval"
+minSST$line_num <- 1:nrow(minSST)
+chrsnp_minSST <- merge(minSST, chrsnp2, by ="line_num")
+chrsnp_minSST<- chrsnp_minSST[,c(1,2,4,5,6)]
+
+chrsnp_minSST$SCAF<- as.numeric(chrsnp_minSST$SCAF)
+chrsnp_minSST$SNP<- as.numeric(chrsnp_minSST$SNP)
+chrsnp_minSST$pval<- as.numeric(chrsnp_minSST$pval)
+windows()
+manhattan(chrsnp_minSST, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+minSST_outliers <- subset(chrsnp_minSST, pval < (0.05/1085778))
+write.table(minSST_outliers,file = "GEA_BioOracle_minSST_outliers", quote = F,row.names = F,col.names = F, sep = "\t")
+
+########range SST
+rangeSST <- data.frame(rangeSST)
+colnames(rangeSST) = "pval"
+rangeSST$line_num <- 1:nrow(rangeSST)
+chrsnp_rangeSST <- merge(rangeSST, chrsnp2, by ="line_num")
+chrsnp_rangeSST<- chrsnp_rangeSST[,c(1,2,4,5,6)]
+
+chrsnp_rangeSST$SCAF<- as.numeric(chrsnp_rangeSST$SCAF)
+chrsnp_rangeSST$SNP<- as.numeric(chrsnp_rangeSST$SNP)
+chrsnp_rangeSST$pval<- as.numeric(chrsnp_rangeSST$pval)
+windows()
+manhattan(chrsnp_rangeSST, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+
+
+########Load Upwelling GEA results
+load("Upwelling_pv.RData")
+
+test<- data.frame(pv$pvalues)
+test2 <- t(test)
+rm(pv)
+rm(test)
+
+cuti <- test2[,1]
+beuti <- test2[,2]
+cuti_top5 <- test2[,3]
+beuti_top5 <- test2[,4]
+cuti_top10 <- test2[,5]
+beuti_top10 <- test2[,6]
+cuti_range <- test2[,7]
+beuti_range <- test2[,8]
+cuti_stdev <- test2[,9]
+beuti_stdev <- test2[,10]
+
+#######################cuti mean
+cuti <- data.frame(cuti)
+colnames(cuti) = "pval"
+cuti$line_num <- 1:nrow(cuti)
+chrsnp_cuti <- merge(cuti, chrsnp2, by ="line_num")
+chrsnp_cuti<- chrsnp_cuti[,c(1,2,4,5,6)]
+
+chrsnp_cuti$SCAF<- as.numeric(chrsnp_cuti$SCAF)
+chrsnp_cuti$SNP<- as.numeric(chrsnp_cuti$SNP)
+chrsnp_cuti$pval<- as.numeric(chrsnp_cuti$pval)
+windows()
+manhattan(chrsnp_cuti, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+cuti_outliers <- subset(chrsnp_cuti, pval < (0.05/1085778))
+write.table(cuti_outliers,file = "GEA_upwelling_cuti_outliers", quote = F,row.names = F,col.names = F, sep = "\t")
+
+#######################beuti mean
+beuti <- data.frame(beuti)
+colnames(beuti) = "pval"
+beuti$line_num <- 1:nrow(beuti)
+chrsnp_beuti <- merge(beuti, chrsnp2, by ="line_num")
+chrsnp_beuti<- chrsnp_beuti[,c(1,2,4,5,6)]
+
+chrsnp_beuti$SCAF<- as.numeric(chrsnp_beuti$SCAF)
+chrsnp_beuti$SNP<- as.numeric(chrsnp_beuti$SNP)
+chrsnp_beuti$pval<- as.numeric(chrsnp_beuti$pval)
+windows()
+manhattan(chrsnp_beuti, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+beuti_outliers <- subset(chrsnp_beuti, pval < (0.05/1085778))
+write.table(beuti_outliers,file = "GEA_Upwelling_beuti_outliers", quote = F,row.names = F,col.names = F, sep = "\t")
+
+#######################cuti top10%
+cuti_top10 <- data.frame(cuti_top10)
+colnames(cuti_top10) = "pval"
+cuti_top10$line_num <- 1:nrow(cuti_top10)
+chrsnp_cuti_top10 <- merge(cuti_top10, chrsnp2, by ="line_num")
+chrsnp_cuti_top10<- chrsnp_cuti_top10[,c(1,2,4,5,6)]
+
+chrsnp_cuti_top10$SCAF<- as.numeric(chrsnp_cuti_top10$SCAF)
+chrsnp_cuti_top10$SNP<- as.numeric(chrsnp_cuti_top10$SNP)
+chrsnp_cuti_top10$pval<- as.numeric(chrsnp_cuti_top10$pval)
+windows()
+manhattan(chrsnp_cuti_top10, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+#no outliers
+#cuti_top10_outliers <- subset(chrsnp_cuti_top10, pval < (0.05/160947))
+#write.table(cuti_top10_outliers,file = "GEA_bioOracle_cuti_top10_outliers", quote = F,row.names = F,col.names = F, sep = "\t")
+
+#######################beuti top10%
+beuti_top10 <- data.frame(beuti_top10)
+colnames(beuti_top10) = "pval"
+beuti_top10$line_num <- 1:nrow(beuti_top10)
+chrsnp_beuti_top10 <- merge(beuti_top10, chrsnp2, by ="line_num")
+chrsnp_beuti_top10<- chrsnp_beuti_top10[,c(1,2,4,5,6)]
+
+chrsnp_beuti_top10$SCAF<- as.numeric(chrsnp_beuti_top10$SCAF)
+chrsnp_beuti_top10$SNP<- as.numeric(chrsnp_beuti_top10$SNP)
+chrsnp_beuti_top10$pval<- as.numeric(chrsnp_beuti_top10$pval)
+windows()
+manhattan(chrsnp_beuti_top10, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+
+#######################cuti top5%
+cuti_top5 <- data.frame(cuti_top5)
+colnames(cuti_top5) = "pval"
+cuti_top5$line_num <- 1:nrow(cuti_top5)
+chrsnp_cuti_top5 <- merge(cuti_top5, chrsnp2, by ="line_num")
+chrsnp_cuti_top5<- chrsnp_cuti_top5[,c(1,2,4,5,6)]
+
+chrsnp_cuti_top5$SCAF<- as.numeric(chrsnp_cuti_top5$SCAF)
+chrsnp_cuti_top5$SNP<- as.numeric(chrsnp_cuti_top5$SNP)
+chrsnp_cuti_top5$pval<- as.numeric(chrsnp_cuti_top5$pval)
+windows()
+manhattan(chrsnp_cuti_top5, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+
+#######################beuti top5%
+beuti_top5 <- data.frame(beuti_top5)
+colnames(beuti_top5) = "pval"
+beuti_top5$line_num <- 1:nrow(beuti_top5)
+chrsnp_beuti_top5 <- merge(beuti_top5, chrsnp2, by ="line_num")
+chrsnp_beuti_top5<- chrsnp_beuti_top5[,c(1,2,4,5,6)]
+
+chrsnp_beuti_top5$SCAF<- as.numeric(chrsnp_beuti_top5$SCAF)
+chrsnp_beuti_top5$SNP<- as.numeric(chrsnp_beuti_top5$SNP)
+chrsnp_beuti_top5$pval<- as.numeric(chrsnp_beuti_top5$pval)
+windows()
+manhattan(chrsnp_beuti_top5, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+beuti_top5_outliers <- subset(chrsnp_beuti_top5, pval < (0.05/160947))
+write.table(beuti_top5_outliers,file = "GEA_bioOracle_beuti_top5_outliers", quote = F,row.names = F,col.names = F, sep = "\t")
+
+#######################cuti range
+cuti_range <- data.frame(cuti_range)
+colnames(cuti_range) = "pval"
+cuti_range$line_num <- 1:nrow(cuti_range)
+chrsnp_cuti_range <- merge(cuti_range, chrsnp2, by ="line_num")
+chrsnp_cuti_range<- chrsnp_cuti_range[,c(1,2,4,5,6)]
+
+chrsnp_cuti_range$SCAF<- as.numeric(chrsnp_cuti_range$SCAF)
+chrsnp_cuti_range$SNP<- as.numeric(chrsnp_cuti_range$SNP)
+chrsnp_cuti_range$pval<- as.numeric(chrsnp_cuti_range$pval)
+windows()
+manhattan(chrsnp_cuti_range, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+#######################beuti range
+beuti_range <- data.frame(beuti_range)
+colnames(beuti_range) = "pval"
+beuti_range$line_num <- 1:nrow(beuti_range)
+chrsnp_beuti_range <- merge(beuti_range, chrsnp2, by ="line_num")
+chrsnp_beuti_range<- chrsnp_beuti_range[,c(1,2,4,5,6)]
+
+chrsnp_beuti_range$SCAF<- as.numeric(chrsnp_beuti_range$SCAF)
+chrsnp_beuti_range$SNP<- as.numeric(chrsnp_beuti_range$SNP)
+chrsnp_beuti_range$pval<- as.numeric(chrsnp_beuti_range$pval)
+windows()
+manhattan(chrsnp_beuti_range, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+beuti_range_outliers <- subset(chrsnp_beuti_range, pval < (0.05/1085778))
+write.table(beuti_range_outliers,file = "GEA_Upwelling_beuti_range_outliers", quote = F,row.names = F,col.names = F, sep = "\t")
+
+#######################cuti stdev
+cuti_stdev <- data.frame(cuti_stdev)
+colnames(cuti_stdev) = "pval"
+cuti_stdev$line_num <- 1:nrow(cuti_stdev)
+chrsnp_cuti_stdev <- merge(cuti_stdev, chrsnp2, by ="line_num")
+chrsnp_cuti_stdev<- chrsnp_cuti_stdev[,c(1,2,4,5,6)]
+
+chrsnp_cuti_stdev$SCAF<- as.numeric(chrsnp_cuti_stdev$SCAF)
+chrsnp_cuti_stdev$SNP<- as.numeric(chrsnp_cuti_stdev$SNP)
+chrsnp_cuti_stdev$pval<- as.numeric(chrsnp_cuti_stdev$pval)
+windows()
+manhattan(chrsnp_cuti_stdev, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+#######################beuti stdev
+beuti_stdev <- data.frame(beuti_stdev)
+colnames(beuti_stdev) = "pval"
+beuti_stdev$line_num <- 1:nrow(beuti_stdev)
+chrsnp_beuti_stdev <- merge(beuti_stdev, chrsnp2, by ="line_num")
+chrsnp_beuti_stdev<- chrsnp_beuti_stdev[,c(1,2,4,5,6)]
+
+chrsnp_beuti_stdev$SCAF<- as.numeric(chrsnp_beuti_stdev$SCAF)
+chrsnp_beuti_stdev$SNP<- as.numeric(chrsnp_beuti_stdev$SNP)
+chrsnp_beuti_stdev$pval<- as.numeric(chrsnp_beuti_stdev$pval)
+windows()
+manhattan(chrsnp_beuti_stdev, chr="SCAF", bp="SNP", snp="V2", p="pval", suggestiveline = -log10(0.05/1085778), genomewideline = -log10(0.1/1085778), logp = T)
+
+beuti_stdev_outliers <- subset(chrsnp_beuti_stdev, pval < (0.05/1085778))
+write.table(beuti_stdev_outliers,file = "GEA_Upwelling_beuti_stdev_outliers", quote = F,row.names = F,col.names = F, sep = "\t")
+```
+
+
+## Redundancy Analysis (RDA)
+
+The vcf input file for this analysis is the same for the BioOracle GEA vcf because we are combining the BioOracle and Upwelling datasets, and the BioOracle dataset was the only one that had missing environmental data for some samples.
+
+Useful link: https://popgen.nescent.org/2018-03-27_RDA_GEA.html
+
+Let's first create the environmental dataset for the RDA in R on our local computer.
+```{r eval=FALSE}
+
+library(vegan) #Used to run RDA
+library(vcfR)
+library(dplyr)
+library(psych) # Used to investigate correlations among predictors
+
+setwd("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GEA")
+
+
+#read in and screen environmental predictors, do this on computer
+#RDA is a regression-based method, and so can be subject to problems when using highly correlated predictors (Dormann et al., 2013). Generally, the |r| > 0.7 "rule of thumb" is a good guideline for removing correlated predictors.
+#RDA
+env <- read.table("sites_environ_matrix.env", header=F)
+colnames(env) = c("chlorophyll", "pH", "salinity", "max_SST", "mean_SST", "min_SST", "range_SST") 
+env <- sapply(env, as.numeric)
+env <- as.data.frame(env)
+
+##get site info for samples in analysis
+BioOracle_samples <- read.delim2("samples_keep_GEA", header=F)
+colnames(BioOracle_samples) = "VCF_NAMES"
+meta <- read.delim2("CCGP_metafile_vcf_sample_names", header=T)
+BioOracle_meta <- merge(BioOracle_samples, meta, by="VCF_NAMES")
+
+#read in cuti beuti env data
+upwelling <- read.table("sites_environ_cuti_beuti.env", header = F)
+colnames(upwelling) = c("Upwelling.cuti", "Upwelling.beuti", "meantop5.cuti", "meantop5.beuti","meantop10.cuti", "meantop10.beuti", "range_tot.cuti", "range_tot.beuti", "stdev.cuti","stdev.beuti") 
+meta$line_num <- 1:nrow(meta) #add line numbers
+upwelling$line_num <- 1:nrow(upwelling) #add line numbers
+
+upwelling_meta <- merge(upwelling, meta, by="line_num")
+small_upwelling <- upwelling_meta[,2:12]
+
+small_upwelling_2 <- merge(BioOracle_meta, small_upwelling, by="LIB_SAMPLE")
+small_upwelling_2 <- small_upwelling_2[,12:21]
+
+env2 <- cbind (env, small_upwelling_2)
+
+
+#####################
+#Assess correlations among environmental datasets
+#####################
+
+windows()
+pairs.panels(env[,1:7], scale=T)
+
+#all temperature datasets are highly correlated so we should reduce the dataset
+pred <- subset(env2, select = -c(max_SST, min_SST, range_SST))
+windows()
+pairs.panels(pred[,5:14], scale=T)
+
+pred2 <- subset(pred, select = -c(Upwelling.beuti, meantop5.cuti, meantop5.beuti,meantop10.cuti,meantop10.beuti,range_tot.cuti,range_tot.beuti,stdev.beuti))
+
+windows()
+pairs.panels(pred2[,1:6], scale=T)
+write.table(pred2, "RDA/sites_environ_matrix_BioOracle_Upwelling.env", row.names = F, col.names = F)
+
+pred3 <- subset(pred2, select = -stdev.cuti)
+pairs.panels(pred3[,1:5], scale=T)
+write.table(pred3, "RDA/sites_environ_matrix_BioOracle_Upwelling2.env", row.names = F, col.names = F)
+
+```
+
+
+Run these lines of code from `GEA.sh`
+```{bash eval=FALSE}
+Rscript RDA/RDA.r --save --verbose
+```
+
+This is the content of the `RDA.R` file:
+```{r eval=FALSE}
+
+library(vegan)
+library(vcfR)
+library(dplyr)
+
+setwd("/group/awhitehegrp/joanna/73-Haliotis/GEA")
+
+##load in vcf and convert to geno file
+data <- read.vcfR("BioOracle_GEA.recode.vcf")
+
+geno <- extract.gt(data)
+
+G <- geno
+G[geno %in% c("0/0")] <- 0
+G[geno  %in% c("0/1")] <- 1
+G[geno %in% c("1/1")] <- 2
+
+##how many NAs in data, RDA requires complete dataframes
+sum(is.na(G))
+
+##simple approach to impute missing values using the most common genotype at each SNP accross as individuals
+G.imp <- apply(G, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))
+sum(is.na(G.imp))
+
+
+##Format geno data
+sapply(G.imp, class)
+G.imp <- as.data.frame(G.imp)
+G.imp <- sapply(G.imp, as.numeric)
+G.imp <- as.data.frame(G.imp)
+sapply(G.imp, class)
+tG <- t(G.imp)
+
+##read in environmental data, see data creation on local computer
+env <- read.table("RDA/sites_environ_matrix_BioOracle_Upwelling2.env", header=F)
+colnames(env) = c("chlorophyll", "pH", "salinity", "mean_SST", "Upwelling.cuti")
+
+#Run the RDA
+redab.rda <- rda(tG ~ ., data=env, scale=T)
+save(redab.rda, file="RDA/redab.rda2.RData")
+
+load("RDA/redab.rda2.RData")
+
+# test for significance
+env.anova <- anova(redab.rda, by="terms", permu=200) #signif of env variables
+axes.anova <- anova(redab.rda, by="axis", perm.max=500) # test axes for significance
+overall.anova <- anova(redab.rda, perm=999) #test for overal significance
+
+save(env.anova, file="RDA/redab.rda_PC.env.anova.results2.RData")
+save(axes.anova, file="RDA/redab.rda.axes.anova.results2.RData")
+save(overall.anova, file="RDA/redab.rda.overall.anova.results2.RData")
+```
+
+
+Let's open up the RData files we created on our local computer using R and create a figure of the result
+
+```{r eval=FALSE}
+
+library(vegan) #Used to run RDA
+library(vcfR)
+library(dplyr)
+library(psych) # Used to investigate correlations among predictors
+
+setwd("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GEA")
+
+load("RDA/redab.rda2.RData")
+
+redab.rda
+#Look at R2, or variance explained. i.e. a adjusted R^2 of 3.311349e-05 
+# means that our constrained ordination explains about 3.3e-03% (0.0033%) of the variation.
+RsquareAdj(redab.rda)
+
+# observe the eigenvalues for the constrained axes
+# reflect the variance explained by each canonical axis
+
+summary(eigenvals(redab.rda, model = "constrained"))
+windows()
+screeplot(redab.rda)
+
+##load ANOVA results
+load("RDA/redab.rda.env.anova.results.RData")
+load("RDA/redab.rda_PC.env.anova.results.RData")
+load("RDA/redab.rda.overall.anova.results.RData")
+
+load("RDA/redab.rda_PC.env.anova.results2.RData")
+
+
+env.anova
+'''
+Model: rda(formula = tG ~ chlorophyll + pH + salinity + mean_SST + Upwelling.cuti, data = env, scale = T)
+                Df Variance      F Pr(>F)
+chlorophyll      1      958 1.0000  0.434
+pH               1      957 0.9986  0.525
+salinity         1      949 0.9910  0.836
+mean_SST         1      959 1.0016  0.379
+Upwelling.cuti   1      966 1.0083  0.169
+Residual       163   156153 
+'''
+summary(env.anova)
+
+overall.anova
+'''
+Model: rda(formula = tG ~ chlorophyll + pH + salinity + mean_SST + Upwelling.cuti, data = env, scale = T)
+          Df Variance      F Pr(>F)
+Model      5     4789 0.9999  0.511
+Residual 163   156153  
+'''
+
+axes.anova
+'''
+Model: rda(formula = tG ~ chlorophyll + pH + salinity + mean_SST + Upwelling.cuti, data = env, scale = T)
+          Df Variance      F Pr(>F)
+RDA1       1      970 1.0128  0.873
+RDA2       1      967 1.0098  0.934
+RDA3       1      955 0.9972  0.998
+RDA4       1      952 0.9935  0.979
+RDA5       1      945 0.9862  0.774
+Residual 163   156153
+'''
+
+#check collinearity , all less than 10, so great!
+vif.cca(redab.rda)
+
+###############
+#plot RDA 
+##############
+
+#SNPs are red at the center of the plot
+#population are black 
+#vectors are env predictors
+
+##get site info for samples in analysis
+BioOracle_samples <- read.delim2("samples_keep_GEA", header=F)
+colnames(BioOracle_samples) = "VCF_NAMES"
+meta <- read.delim2("CCGP_metafile_vcf_sample_names", header=T)
+
+BioOracle_meta <- merge(BioOracle_samples, meta, by="VCF_NAMES")
+
+levels(BioOracle_meta$SIMPLE_LOCATION) <- c("CharlestonSouthCove", "PortOrford", "Brookings", "CrescentCity", "VanDamme", "SaltPoint", "TimberCove", "MunizRanch", "BodegaBay", "PointReyes","FarallonesIsland",  "Monterey",  "MorroBay", "SanMiguelIsle", "SanPedro", "PointLoma", "SantoTomas", "PuntaSanJose")
+
+BioOracle_meta$line_num <- 1:nrow(BioOracle_meta) #add line numbers
+
+loc_colors <- data.frame(
+    colors= c("#5E4FA2","#4A68AE","#449DB4","#5CB7A9","#D0EC9C","#E8F59B","#F3FAAD","#FFFFBF","#FEF0A7","#FEE28F","#FDCD7B","#FDB768","#FA9C58","#F67E4B","#EE6445","#E04F4A","#B71C47","#9E0142"),
+    SIMPLE_LOCATION= c("CharlestonSouthCove", "PortOrford", "Brookings", "CrescentCity", "VanDamme", "SaltPoint", "TimberCove", "MunizRanch", "BodegaBay", "PointReyes","FarallonesIsland",  "Monterey",  "MorroBay", "SanMiguelIsle", "SanPedro", "PointLoma", "SantoTomas", "PuntaSanJose"))
+
+
+
+BioOracle_colors <- merge(BioOracle_meta, loc_colors, by="SIMPLE_LOCATION")
+BioOracle_colors2 <- BioOracle_colors[order(BioOracle_colors$line_num),]
+graph_colors <- BioOracle_colors2$colors
+
+
+windows()
+par(mar=c(5, 4, 4, 9), xpd=TRUE)
+plot(redab.rda, type="n", scaling=3)
+abline(h = 0, v = 0, col = "white", lwd = 2)
+box()
+points(redab.rda, display="species", pch=20, cex=0.7, col="gray32", scaling=3) #the snps
+points(redab.rda, display="sites", pch=21, cex=1.3, col="gray32", scaling=3, bg=graph_colors) #the abalone locations
+text(redab.rda, scaling=3, display="bp", col="black", cex=1) #the predictors
+legend(4.2,4, legend=levels(BioOracle_meta$SIMPLE_LOCATION), bty="n", col="gray32", pch=21, cex=1, pt.bg=loc_colors$colors)
+dev.off()
+```
+
+
+# Gene Ontology of outliers
+
+A very helpful tutorial: https://datacatz.wordpress.com/2018/01/19/gene-set-enrichment-analysis-with-topgo-part-1/
+
+
+
+Downloaded genomic.gff file from NCBI
+Selected on the genes from the file:
+`awk '{if ($3 == "gene") print $0;}' genomic.gff > genomic.gene.gff`
+
+
+
+Download program LD-annot:
+
+`git clone https://github.com/ArnaudDroitLab/LD-annot.git`
+`chmod +x LD-annot0.4.py`
+For all the plink steps in the `calculLD.1.sh` code, I added the following flag `--allow-extra-chr` and I deleted the flag `--chr-set $NR`
+
+
+Next use the `GO_analysis.R` script for converting gff files and outlier SNPs into correct format for LD-annot
+```{r eval=FALSE}
+
+library(dplyr)
+library(tidyr)
+
+setwd("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GO")
+
+GCF_contigs <- read.delim2("GCF_contigs", header=T)
+GCA_contigs <- read.delim2("GCA_contigs.txt", header=T)
+
+contigs <- merge(GCA_contigs, GCF_contigs, by="SCAF")
+
+################
+#convert gff contig names
+################
+
+gff <- read.delim2("../../Reference_Genome/GCF_023055435.1/genomic.gene.gff", header=F)
+colnames(gff) = c("GCF_contig_names", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9")
+
+gff_contigs <- merge(gff, contigs, by="GCF_contig_names")
+rm(gff)
+gff_contigs <- gff_contigs[,c(11,2,3,4,5,6,7,8,9)]
+
+
+write.table(gff_contigs,file = "genomic.GCA_full_names.gff", quote = F,row.names = F,col.names = F, sep = "\t")
+#after writing to file, edit to remove the headers and add this line to top of file including hahtags:
+##gff-version 3
+
+######################################
+#get Outflank outliers SNPs from analysis
+######################################
+outflank_outliers <- read.delim2("../outlier_analyses/CCGP_outflank_outliers_for_structure", header=F)
+colnames(outflank_outliers) = "GCA_contig_SNP"
+
+outflank_outliers <- separate(data = outflank_outliers, col=GCA_contig_SNP, into= c("GCA_contig_name", "SNP"), sep = ":", remove=T)
+colnames(outflank_outliers) = c("chr", "SNP")
+
+outflank_outliers$chr_SNP <- paste(outflank_outliers$chr, outflank_outliers$SNP, sep = "_")
+
+write.table(outflank_outliers,file = "outflank_outliers_for_LDannot", quote = F,row.names = F,col.names = T, sep = "\t")
+
+######################################
+#get PCAdapt outliers SNPs from analysis
+######################################
+PCAdapt_outliers <- read.delim2("../outlier_analyses/CCGP_pcadapt_outliers_for_structure", header=F)
+colnames(PCAdapt_outliers) = "GCA_contig_SNP"
+
+PCAdapt_outliers <- separate(data = PCAdapt_outliers, col=GCA_contig_SNP, into= c("GCA_contig_name", "SNP"), sep = ":", remove=T)
+colnames(PCAdapt_outliers) = c("chr", "SNP")
+
+PCAdapt_outliers$chr_SNP <- paste(PCAdapt_outliers$chr, PCAdapt_outliers$SNP, sep = "_")
+
+write.table(PCAdapt_outliers,file = "PCAdapt_outliers_for_LDannot", quote = F,row.names = F,col.names = T, sep = "\t")
+
+
+######################################
+#get GEA outliers SNPs from analysis
+######################################
+
+#choose one input file
+GEA_outliers <- read.delim2("../GEA/GEA_BioOracle_minSST_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_BioOracle_maxSST_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_upwelling_cuti_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_upwelling_beuti_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_upwelling_beuti_top5_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_Upwelling_beuti_range_outliers", header=F)
+GEA_outliers <- read.delim2("../GEA/GEA_Upwelling_beuti_stdev_outliers", header=F)
+
+GEA_outliers <- data.frame(GEA_outliers[,3])
+colnames(GEA_outliers) = "GCA_contig_SNP"
+
+GEA_outliers <- separate(data = GEA_outliers, col=GCA_contig_SNP, into= c("GCA_contig_name", "SNP"), sep = ":", remove=T)
+colnames(GEA_outliers) = c("chr", "SNP")
+
+GEA_outliers$chr_SNP <- paste(GEA_outliers$chr, GEA_outliers$SNP, sep = "_")
+
+#choose one output file to write to
+write.table(GEA_outliers,file = "GEA_minSST_outliers_for_LDannot", quote = F,row.names = F,col.names = T, sep = "\t")
+write.table(GEA_outliers,file = "GEA_maxSST_outliers_for_LDannot", quote = F,row.names = F,col.names = T, sep = "\t")
+write.table(GEA_outliers,file = "GEA_cuti_outliers_for_LDannot", quote = F,row.names = F,col.names = T, sep = "\t")
+write.table(GEA_outliers,file = "GEA_beuti_outliers_for_LDannot", quote = F,row.names = F,col.names = T, sep = "\t")
+write.table(GEA_outliers,file = "GEA_beuti_top5_outliers_for_LDannot", quote = F,row.names = F,col.names = T, sep = "\t")
+write.table(GEA_outliers,file = "GEA_beuti_range_outliers_for_LDannot", quote = F,row.names = F,col.names = T, sep = "\t")
+write.table(GEA_outliers,file = "GEA_beuti_stdev_outliers_for_LDannot", quote = F,row.names = F,col.names = T, sep = "\t")
+```
+
+
+
+Bring each of the created files for LDannot onto the cluster and run the following script: `LD-annot.sh`
+
+Each time you rerun, make sure to move old files into correct output directory and to delete the file called `checkpoint`.
+Also note that the vcf has to by unzipped or else it won't be recognized
+```{bash eval=FALSE}
+#!/bin/bash
+
+#SBATCH -D /home/jsgriffi
+#SBATCH --job-name=LD-annot
+#SBATCH --mem=10G
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH -o /group/awhitehegrp/joanna/73-Haliotis/output_files/out-%A.%a_annot.txt
+#SBATCH -e /group/awhitehegrp/joanna/73-Haliotis/output_files/error-%A.%a_annot.txt
+#SBATCH --time=72:00:00
+#SBATCH --mail-user=jsgriffiths@ucdavis.edu
+#SBATCH --mail-type=ALL
+#SBATCH -p high
+
+module load conda/base/latest
+module load deprecated/plink/1.90
+
+cd /group/awhitehegrp/joanna/73-Haliotis/GO/LD-annot
+
+python3 LD-annot0.4.py NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf genomic.GCA_full_names.gff outflank_outliers_for_LDannot gene 0.8 outflank_LDannot_output
+
+python3 LD-annot0.4.py NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf genomic.GCA_full_names.gff PCAdapt_outliers_for_LDannot gene 0.8 PCAdapt_LDannot_output
+
+python3 LD-annot0.4.py NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf genomic.GCA_full_names.gff GEA_minSST_outliers_for_LDannot gene 0.8 GEA_minSST_LDannot_output
+
+python3 LD-annot0.4.py NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf genomic.GCA_full_names.gff GEA_maxSST_outliers_for_LDannot gene 0.8 GEA_maxSST_LDannot_output
+
+python3 LD-annot0.4.py NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf genomic.GCA_full_names.gff GEA_cuti_outliers_for_LDannot gene 0.8 GEA_cuti_LDannot_output
+
+python3 LD-annot0.4.py NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf genomic.GCA_full_names.gff GEA_beuti_outliers_for_LDannot gene 0.8 GEA_beuti_LDannot_output
+
+python3 LD-annot0.4.py NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf genomic.GCA_full_names.gff GEA_beuti_range_outliers_for_LDannot gene 0.8 GEA_beuti_range_LDannot_output
+
+python3 LD-annot0.4.py NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf genomic.GCA_full_names.gff GEA_beuti_top5_outliers_for_LDannot gene 0.8 GEA_beuti_top5_LDannot_output
+
+python3 LD-annot0.4.py NoSibs.NoLowDP.filtered.vcf.missing75maf5.min10.maxDP40.contigremoved3.vcf genomic.GCA_full_names.gff GEA_beuti_stdev_outliers_for_LDannot gene 0.8 GEA_beuti_stdev_LDannot_output
+
+```
+* "type" is the feature (mRNA, CDS, gene)
+* "thr" is r2 threshold 
+
+
+Now bring the main output file back onto the local computer into R to do GO enrichment tests.
+see the `GO_analysis.R` script:
+```{r eval=FALSE}
+
+###########################
+### R script to do GO
+###########################
+
+setwd("C:/Users/joann/OneDrive/Documents/UCDavis/Whitehead_lab/CCGP_Abalone/CCGP_analyses/GO")
+
+#if (!require("BiocManager", quietly = TRUE))
+# install.packages("BiocManager")
+
+#BiocManager::install("biomaRt")
+#BiocManager::install("topGO")
+
+library("biomaRt")
+library(topGO)
+
+listMarts()
+
+# look at top 10 databases      
+head(biomaRt::listMarts(host = "http://metazoa.ensembl.org/"), 10)  
+
+#collect gene names from biomart
+mart=biomaRt::useMart('metazoa_mart', host = "http://metazoa.ensembl.org/")
+listDatasets(mart)
+
+mart2 <- biomaRt::useMart(biomart = "metazoa_mart",
+                         dataset = "hrgca023055435v1rs_eg_gene",
+                         host = 'https://metazoa.ensembl.org')
+
+
+
+# Get ensembl gene ids and GO terms
+GTOGO <- biomaRt::getBM(attributes = c( "ensembl_gene_id",
+                                        "go_id"), mart = mart2)
+
+#examine result
+head(GTOGO)
+
+#Remove blank entries
+GTOGO <- GTOGO[GTOGO$go_id != '',]
+
+# convert from table format to list format
+geneID2GO <- by(GTOGO$go_id,
+                GTOGO$ensembl_gene_id,
+                function(x) as.character(x))
+
+#examine result
+head(geneID2GO)
+
+
+
+#select genes of interest from the gene list
+library(dplyr)
+library(tidyr)
+
+#select one output file
+LDannot <- read.delim2("outflank_LDannot_output")
+LDannot <- read.delim2("PCAdapt_LDannot_output")
+
+#Not enough outliers from GEA to do GO enrichment, so I just looked up the gene names for each outlier using ensembl red abalone database
+LDannot <- read.delim2("GEA_minSST_LDannot_output")
+LDannot <- read.delim2("GEA_maxSST_LDannot_output") 
+LDannot <- read.delim2("GEA_cuti_LDannot_output") 
+LDannot <- read.delim2("GEA_beuti_LDannot_output") 
+LDannot <- read.delim2("GEA_beuti_top5_LDannot_output") 
+LDannot <- read.delim2("GEA_beuti_range_LDannot_output")
+LDannot <- read.delim2("GEA_beuti_stdev_LDannot_output") 
+
+
+gene_ids <- separate(data = LDannot, col=annotation, into= c("gene_LOC", "GeneID"), sep = ";", remove=T)
+gene_ids$gene_LOC <- gsub("ID=gene-","",as.character(gene_ids$gene_LOC))
+
+int.genes.df <- data.frame(gene_ids[,7])
+colnames(int.genes.df) <- "gene_id"
+
+#keep only unique gene IDs from biomaRt--but which GO term gets chosen, I think it get's chosen in topGO later
+all.genes <- sort(unique(as.character(GTOGO$ensembl_gene_id)))
+
+cands.chr <-as.character(int.genes.df$gene_id)
+
+# compare the chr lists of cands & all genes and turn into factor as to whether they overlap or not
+int.genes <- factor(as.integer(all.genes %in% cands.chr))
+names(int.genes) = all.genes
+
+
+# #create GO object (for running in topGO!)
+library(topGO)
+
+# GO for Biological Process
+go.obj.bp <- new("topGOdata", ontology='BP'
+                 , allGenes = int.genes # this is factor containing interesting genes (gene IDs for outliers)
+                 , annot = annFUN.gene2GO # we use this function as we supply our own annotations 
+                 , gene2GO = geneID2GO # this is our object we just created with biomaRt
+)
+
+test.stat <- new("classicCount", testStatistic = GOFisherTest, name = "Fisher test")
+test.stat2 <- new("weightCount", testStatistic = GOFisherTest, name = "Fisher test", sigRatio = "ratio")
+
+resultFisher <- getSigGroups(go.obj.bp, test.stat)
+resultWeight <- getSigGroups(go.obj.bp, test.stat2)
+
+allRes <- GenTable(go.obj.bp, classic = resultFisher, 
+                   weight = resultWeight, orderBy = "weight", 
+                   ranksOf = "classic",topNodes=length(resultFisher@score),numChar=100)
+filtRes.BP <- allRes[allRes$classic<0.05 & allRes$Significant>2,]
+filtRes.BP$Ontology <- "BP"
+
+# GO for Molecular Function
+go.obj.mf <- new("topGOdata", ontology='MF'
+                 , allGenes = int.genes # this is factor containing interesting genes (gene IDs for outliers)
+                 , annot = annFUN.gene2GO # we use this function as we supply our own annotations 
+                 , gene2GO = geneID2GO # this is our object we just created with biomaRt
+)
+
+resultFisher <- getSigGroups(go.obj.mf, test.stat)
+resultWeight <- getSigGroups(go.obj.mf, test.stat2)
+allRes <- GenTable(go.obj.mf, classic = resultFisher, 
+                   weight = resultWeight, orderBy = "weight", 
+                   ranksOf = "classic",topNodes=length(resultFisher@score),numChar=100)
+filtRes.MF <- allRes[allRes$classic<0.05 & allRes$Significant>2,]
+filtRes.MF$Ontology <- "MF"
+
+# GO for Cellular Component
+go.obj.cc <- new("topGOdata", ontology='CC'
+                 , allGenes = int.genes # this is factor containing interesting genes (gene IDs for outliers)
+                 , annot = annFUN.gene2GO # we use this function as we supply our own annotations 
+                 , gene2GO = geneID2GO # this is our object we just created with biomaRt
+)
+resultFisher <- getSigGroups(go.obj.cc, test.stat)
+resultWeight <- getSigGroups(go.obj.cc, test.stat2)
+allRes <- GenTable(go.obj.cc, classic = resultFisher, 
+                   weight = resultWeight, orderBy = "weight", 
+                   ranksOf = "classic", topNodes=length(resultFisher@score))
+filtRes.CC <- allRes[allRes$classic<0.05 & allRes$Significant>2,]
+filtRes.CC$Ontology <- "CC"
+
+##Output all three
+filt.all <- rbind(filtRes.BP,filtRes.MF,filtRes.CC)
+
+
+#Write to correspinging input file
+write.csv(filt.all,"GO.new.outflank.outs.csv")
+write.csv(filt.all,"GO.new.PCAdapt.outs.csv")
+write.csv(filt.all,"GO.new.GEA.minSST.outs.csv") 
+write.csv(filt.all,"GO.new.GEA.maxSST.outs.csv") 
+write.csv(filt.all,"GO.new.GEA.cuti.outs.csv") 
+write.csv(filt.all,"GO.new.GEA.beuti.outs.csv") 
+write.csv(filt.all,"GO.new.GEA.beutitop5.outs.csv") 
+write.csv(filt.all,"GO.new.GEA.beutirange.outs.csv") 
+write.csv(filt.all,"GO.new.GEA.beutistdev.outs.csv") 
+```
